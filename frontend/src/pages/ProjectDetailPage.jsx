@@ -365,16 +365,22 @@ function ReportsTab({ projectId }) {
     setBusyId(report.id);
     setBusyAction(action);
     try {
-      if (action === "view") await reportsApi.viewInBrowser(report);
-      else await reportsApi.saveToDisk(report);
+      if (action === "view") {
+        const out = await reportsApi.viewInBrowser(report);
+        if (out?.popupBlocked) toast.info("Popup was blocked — saved to your downloads instead.");
+      } else {
+        await reportsApi.saveToDisk(report);
+      }
     } catch (e) {
-      toast.error(
-        e?.response?.status === 410
-          ? "Report file no longer exists on the server."
-          : action === "view"
-          ? "Could not open report."
-          : "Could not download report."
-      );
+      console.error("[reports] action failed:", e);
+      const status = e?.status ?? e?.response?.status;
+      const verb = action === "view" ? "open" : "download";
+      let msg;
+      if (status === 410) msg = "Report file no longer exists on the server.";
+      else if (status === 401) msg = "Session expired — please sign in again.";
+      else if (status === 404) msg = "Report not found.";
+      else msg = `Could not ${verb} report — ${e?.message || "unknown error"}`;
+      toast.error(msg);
     } finally {
       setBusyId(null);
       setBusyAction(null);
