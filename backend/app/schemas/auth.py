@@ -1,3 +1,4 @@
+from typing import Literal
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -35,3 +36,8 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     phone: str | None = None
+    # Self-registration may pick engineer, project_manager, or viewer.
+    # 'admin' is intentionally not in this Literal so the API rejects it
+    # before it even reaches the route handler. Defaults to 'engineer' so
+    # newly-onboarded staff can do real work without an admin promotion step.
+    role: Literal["engineer", "project_manager", "viewer"] = "engineer"

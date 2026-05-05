@@ -4,7 +4,7 @@ import { useAuth } from "../contexts/AuthContext";
 // `roles` (when present) gates the sidebar entry — viewers don't see "AI
 // Analysis" or "Users" because they cannot use those pages.
 const navItems = [
-  { to: "/", label: "Dashboard", icon: "📊" },
+  { to: "/dashboard", label: "Dashboard", icon: "📊" },
   { to: "/projects", label: "Projects", icon: "🏗️" },
   { to: "/ai-analysis", label: "AI Analysis", icon: "🤖", roles: ["admin", "project_manager", "engineer"] },
   { to: "/alerts", label: "Alerts", icon: "🔔" },
@@ -25,7 +25,7 @@ export default function Layout() {
     <div className="min-h-screen flex bg-slate-50">
       <aside className="w-60 bg-ukwi-700 text-white flex flex-col">
         <div className="px-5 py-4 border-b border-ukwi-600">
-          <Link to="/" className="block">
+          <Link to="/dashboard" className="block">
             <div className="font-bold text-lg">UKWI Monitor</div>
             <div className="text-xs text-ukwi-100">Construction AI</div>
           </Link>
@@ -37,7 +37,7 @@ export default function Layout() {
               <NavLink
                 key={it.to}
                 to={it.to}
-                end={it.to === "/"}
+                end={it.to === "/dashboard"}
                 className={({ isActive }) =>
                   `flex items-center gap-2 px-3 py-2 rounded text-sm hover:bg-ukwi-600 ${
                     isActive ? "bg-ukwi-600" : ""

@@ -26,18 +26,23 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 def register(payload: RegisterRequest, db: Annotated[Session, Depends(get_db)]):
     if db.scalar(select(User).where(User.email == payload.email)):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+    # Defensive: payload.role is restricted to non-admin via the Literal in the
+    # schema, but we re-check here so any future schema regression cannot
+    # accidentally let the public endpoint mint admins.
+    if payload.role == "admin":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Admin role cannot be self-assigned")
     user = User(
         full_name=payload.full_name,
         email=payload.email,
         password_hash=hash_password(payload.password),
-        role=UserRole.viewer,
+        role=UserRole(payload.role),
         phone=payload.phone,
         is_active=True,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
-    log_action(db, user.id, "user.register", "user", user.id)
+    log_action(db, user.id, "user.register", "user", user.id, details={"role": user.role.value})
     db.commit()
     return user
 
