@@ -50,6 +50,14 @@ def list_reports(
     return db.scalars(stmt.order_by(desc(Report.generated_at)).offset(skip).limit(limit)).all()
 
 
+_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
+    ".csv": "text/csv",
+}
+
+
 @router.get("/reports/{report_id}/download")
 def download(report_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
     r = db.get(Report, report_id)
@@ -58,7 +66,16 @@ def download(report_id: int, db: Annotated[Session, Depends(get_db)], user: Curr
     p = Path(r.file_path)
     if not p.exists():
         raise HTTPException(410, "Report file no longer exists")
-    return FileResponse(str(p), filename=p.name)
+    media_type = _MEDIA_TYPES.get(p.suffix.lower(), "application/octet-stream")
+    # `inline` lets the browser render PDFs in a new tab via the View button;
+    # `attachment` would force a save. Either way the frontend uses Blob URLs
+    # so the actual UX (view vs download) is decided client-side, not here.
+    return FileResponse(
+        str(p),
+        media_type=media_type,
+        filename=p.name,
+        content_disposition_type="inline",
+    )
 
 
 @router.post("/projects/{project_id}/reports/progress", response_model=ReportOut, status_code=status.HTTP_201_CREATED)
