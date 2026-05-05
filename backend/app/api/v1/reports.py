@@ -1,7 +1,8 @@
 from typing import Annotated
 from pathlib import Path
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
@@ -66,15 +67,24 @@ def download(report_id: int, db: Annotated[Session, Depends(get_db)], user: Curr
     p = Path(r.file_path)
     if not p.exists():
         raise HTTPException(410, "Report file no longer exists")
+
+    # Read the whole file into memory and respond with a plain Response. This
+    # guarantees the entire body + headers are written in one atomic flush
+    # which dev proxies (Vite) sometimes mishandle when relaying streamed
+    # FileResponses and the browser sees ERR_CONNECTION_RESET.
+    data = p.read_bytes()
     media_type = _MEDIA_TYPES.get(p.suffix.lower(), "application/octet-stream")
-    # `inline` lets the browser render PDFs in a new tab via the View button;
-    # `attachment` would force a save. Either way the frontend uses Blob URLs
-    # so the actual UX (view vs download) is decided client-side, not here.
-    return FileResponse(
-        str(p),
+    # RFC 6266: ASCII filename + UTF-8 fallback for non-ASCII characters.
+    safe_name = quote(p.name)
+    return Response(
+        content=data,
         media_type=media_type,
-        filename=p.name,
-        content_disposition_type="inline",
+        headers={
+            "Content-Disposition": f'inline; filename="{p.name}"; filename*=UTF-8\'\'{safe_name}',
+            "Content-Length": str(len(data)),
+            "Cache-Control": "private, max-age=0, no-cache",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
