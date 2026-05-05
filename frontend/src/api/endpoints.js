@@ -106,33 +106,32 @@ export const notificationsApi = {
   read: (id) => api.patch(`/notifications/${id}/read`),
 };
 
-// Build a download URL with the JWT baked in as a query param. The backend
+// Build report URLs with the JWT baked in as a query param. The backend
 // accepts ?token= as an alternative to the Authorization header so View /
-// Download can use plain browser navigation (window.open, <a href download>)
-// instead of fetch/XHR-with-blob — which can be killed by AV, extensions,
-// or finicky dev proxies and produces ERR_CONNECTION_RESET / Failed to fetch.
-function _reportUrl(reportId) {
+// Download can use plain browser navigation — sidesteps fetch/XHR-with-blob
+// which can be killed by AV web-shields, extensions, or finicky dev proxies
+// (ERR_CONNECTION_RESET, "Failed to fetch", etc.).
+function _reportUrl(reportId, mode /* "download" | "view" */) {
   const base = import.meta.env.VITE_API_BASE_URL || "/api";
   const token = localStorage.getItem("ukwi_access_token") || "";
   const root = base.replace(/\/$/, "");
-  return `${root}/reports/${reportId}/download?token=${encodeURIComponent(token)}`;
+  const path = mode === "view" ? "view" : "download";
+  return `${root}/reports/${reportId}/${path}?token=${encodeURIComponent(token)}`;
 }
 
 
 export const reportsApi = {
   list: (params) => api.get("/reports", { params }),
   generate: (data) => api.post("/reports/generate", data),
-  // Kept for callers that want axios-style access; not used by saveToDisk/viewInBrowser.
   download: (id) => api.get(`/reports/${id}/download`, { responseType: "blob" }),
 
   /**
-   * Download a report by triggering a plain browser navigation with the
-   * JWT in the URL. Avoids every fetch/XHR/blob/window.open hazard.
+   * Save a report to disk. Plain `<a download>` navigation with JWT in URL.
    */
   saveToDisk: async (report) => {
     const a = document.createElement("a");
-    a.href = _reportUrl(report.id);
-    a.download = ""; // browser will use the server's Content-Disposition filename
+    a.href = _reportUrl(report.id, "download");
+    a.download = ""; // browser uses server's Content-Disposition filename
     a.rel = "noopener noreferrer";
     document.body.appendChild(a);
     a.click();
@@ -140,16 +139,22 @@ export const reportsApi = {
   },
 
   /**
-   * Open a report in a new tab using a plain navigation. PDFs render
-   * inline; Excel falls back to the OS handler. If the browser blocks
-   * window.open we fall back to same-tab navigation so the user still
-   * gets the file.
+   * Open a report in a new tab. Hits the `/view` endpoint which serves
+   * the file wrapped in an HTML page (text/html, with the PDF embedded
+   * as a base64 data: URL inside an iframe). Two reasons:
+   *
+   * 1. text/html responses are not flagged by most AV web-shield modules
+   *    that intercept application/pdf and reset the connection.
+   * 2. Browsers' built-in PDF viewers handle data: URLs in iframes more
+   *    reliably than direct application/pdf navigations through a dev
+   *    proxy.
+   *
+   * window.open with <a target=_blank> fallback if a popup blocker fires.
    */
   viewInBrowser: async (report) => {
-    const url = _reportUrl(report.id);
+    const url = _reportUrl(report.id, "view");
     const win = window.open(url, "_blank", "noopener,noreferrer");
     if (!win) {
-      // Popup blocked — drop a hidden anchor click as a last resort.
       const a = document.createElement("a");
       a.href = url;
       a.target = "_blank";

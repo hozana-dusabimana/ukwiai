@@ -91,6 +91,19 @@ def _user_for_download(
     return u
 
 
+def _read_report(db: Session, report_id: int) -> tuple[Report, bytes, str, Path]:
+    """Common loader: 404/410 + bytes + media type + path."""
+    r = db.get(Report, report_id)
+    if not r:
+        raise HTTPException(404, "Report not found")
+    p = Path(r.file_path)
+    if not p.exists():
+        raise HTTPException(410, "Report file no longer exists")
+    data = p.read_bytes()
+    media_type = _MEDIA_TYPES.get(p.suffix.lower(), "application/octet-stream")
+    return r, data, media_type, p
+
+
 @router.get("/reports/{report_id}/download")
 def download(
     report_id: int,
@@ -104,17 +117,7 @@ def download(
     the JS-with-Authorization-header path is blocked by AV, extensions, or
     a finicky dev proxy.
     """
-    r = db.get(Report, report_id)
-    if not r:
-        raise HTTPException(404, "Report not found")
-    p = Path(r.file_path)
-    if not p.exists():
-        raise HTTPException(410, "Report file no longer exists")
-
-    # Read whole file into memory and respond atomically (no streaming —
-    # avoids Vite/http-proxy-middleware mishandling on some dev setups).
-    data = p.read_bytes()
-    media_type = _MEDIA_TYPES.get(p.suffix.lower(), "application/octet-stream")
+    r, data, media_type, p = _read_report(db, report_id)
     safe_name = quote(p.name)
     log_action(db, user.id, "report.download", "report", r.id)
     db.commit()
@@ -128,6 +131,58 @@ def download(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.get("/reports/{report_id}/view")
+def view_in_html_wrapper(
+    report_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(_user_for_download)],
+):
+    """Serve the report wrapped in an HTML page with the file embedded as a
+    base64 data: URL. This sidesteps two classes of failure:
+
+    - Some antivirus 'web shield' modules inspect application/pdf responses
+      and can RST the connection mid-way; an HTML page with text/html bypass
+      that.
+    - Some browsers' built-in PDF viewers misbehave under window.open of a
+      raw application/pdf response when served via a dev proxy.
+
+    The embedded PDF / Excel data never leaves the user's browser as a
+    separate network request, so it's invisible to most middleware.
+    """
+    import base64
+    r, data, media_type, p = _read_report(db, report_id)
+    log_action(db, user.id, "report.view", "report", r.id)
+    db.commit()
+    b64 = base64.b64encode(data).decode("ascii")
+    title = p.name
+    is_pdf = media_type == "application/pdf"
+    body_html = (
+        f'<iframe src="data:application/pdf;base64,{b64}" '
+        f'style="border:0;width:100vw;height:100vh"></iframe>'
+        if is_pdf
+        else (
+            f'<div class="msg">'
+            f'  <h1>{title}</h1>'
+            f'  <p>This file type ({media_type}) cannot be previewed in the '
+            f'browser. Use the link below to download.</p>'
+            f'  <a class="btn" download="{title}" '
+            f'     href="data:{media_type};base64,{b64}">⬇️ Download {title}</a>'
+            f'</div>'
+        )
+    )
+    html = f"""<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><title>{title} — UKWI Monitor</title>
+<style>
+  html,body {{ margin:0; padding:0; height:100%; background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif }}
+  .msg {{ max-width:560px; margin:80px auto; padding:24px; background:#1e293b; border-radius:8px }}
+  .msg h1 {{ font-size:18px; margin:0 0 8px }}
+  .msg p  {{ color:#94a3b8; line-height:1.5 }}
+  .btn {{ display:inline-block; margin-top:16px; padding:8px 14px; background:#3a7ca5;
+         color:#fff; border-radius:6px; text-decoration:none; font-weight:600 }}
+</style></head><body>{body_html}</body></html>"""
+    return Response(content=html, media_type="text/html; charset=utf-8")
 
 
 @router.post("/projects/{project_id}/reports/progress", response_model=ReportOut, status_code=status.HTTP_201_CREATED)
