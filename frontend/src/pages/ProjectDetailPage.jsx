@@ -7,7 +7,8 @@ import {
 } from "../api/endpoints";
 import StatusBadge from "../components/StatusBadge";
 import RoleGate from "../components/RoleGate";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from "recharts";
+import ImagePicker from "../components/ImagePicker";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, CartesianGrid } from "recharts";
 
 const ENGINEER_PLUS = ["admin", "project_manager", "engineer"];
 const MANAGER_PLUS = ["admin", "project_manager"];
@@ -153,7 +154,11 @@ function ImagesTab({ projectId }) {
       fd.append("file", file);
       return imagesApi.upload(projectId, fd);
     },
-    onSuccess: () => { toast.success("Uploaded"); qc.invalidateQueries({ queryKey: ["images", projectId] }); setFile(null); },
+    onSuccess: () => {
+      toast.success("Image uploaded");
+      qc.invalidateQueries({ queryKey: ["images", projectId] });
+      setFile(null);
+    },
     onError: (e) => toast.error(e?.response?.data?.detail || "Upload failed"),
   });
 
@@ -163,21 +168,64 @@ function ImagesTab({ projectId }) {
         roles={ENGINEER_PLUS}
         fallback={<ReadOnlyHint message="Read-only — only engineers, project managers, and admins can upload site images." />}
       >
-        <div className="card flex items-center gap-3">
-          <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files[0])} />
-          <button disabled={!file || upload.isPending} className="btn-primary" onClick={() => upload.mutate()}>
-            {upload.isPending ? "Uploading…" : "Upload image"}
-          </button>
+        <div className="card">
+          <div className="flex items-start justify-between mb-3 flex-wrap gap-2">
+            <div>
+              <h3 className="font-semibold text-slate-800">Add a site photo</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Take a photo with your camera, drop a file, or pick from disk. Photos are stored against this project.
+              </p>
+            </div>
+            {file && (
+              <button
+                type="button"
+                disabled={upload.isPending}
+                onClick={() => upload.mutate()}
+                className="btn-primary"
+              >
+                {upload.isPending ? "Uploading…" : "📤 Upload"}
+              </button>
+            )}
+          </div>
+          <ImagePicker value={file} onChange={setFile} disabled={upload.isPending} />
         </div>
       </RoleGate>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-        {(list.data || []).map((img) => (
-          <div key={img.id} className="card p-2">
-            <img src={img.image_url} alt="" className="w-full h-40 object-cover rounded" />
-            <div className="text-xs mt-2 text-slate-500">{new Date(img.captured_date || img.created_at).toLocaleString()}</div>
-          </div>
-        ))}
-        {(!list.data || list.data.length === 0) && <div className="col-span-full text-slate-500">No images yet.</div>}
+
+      <div className="card">
+        <div className="flex items-baseline justify-between mb-3">
+          <h3 className="font-semibold text-slate-800">Photo gallery</h3>
+          <span className="text-xs text-slate-500">{(list.data || []).length} image(s)</span>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+          {(list.data || []).map((img) => (
+            <a
+              key={img.id}
+              href={img.image_url}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-lg overflow-hidden border border-slate-200 bg-slate-50 hover:shadow-md transition-shadow group"
+            >
+              <div className="aspect-[4/3] overflow-hidden bg-slate-100">
+                <img
+                  src={img.image_url}
+                  alt={img.original_filename || ""}
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                />
+              </div>
+              <div className="p-2 text-xs text-slate-500 flex items-center justify-between">
+                <span>{new Date(img.captured_date || img.created_at).toLocaleDateString()}</span>
+                {img.file_size && <span>{Math.round(img.file_size / 1024)} KB</span>}
+              </div>
+            </a>
+          ))}
+          {(!list.data || list.data.length === 0) && (
+            <div className="col-span-full text-center py-8 text-slate-500">
+              <div className="text-4xl mb-2">📸</div>
+              <div className="font-medium text-slate-700">No site photos yet</div>
+              <div className="text-xs mt-1">Use the form above to capture or upload the first one.</div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -1,21 +1,158 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-toastify";
 import { aiApi, projectsApi } from "../api/endpoints";
+import ImagePicker from "../components/ImagePicker";
+
+const STAGE_LABELS = {
+  stage_1: "Site Clearing",
+  stage_2: "Sub-base",
+  stage_3: "Concrete Slab",
+  stage_4: "Surface Finish",
+  stage_5: "Line Marking",
+  stage_6: "Hoops & Backboards",
+  stage_7: "Fencing & Final",
+};
+
+const CONFIDENCE_STYLES = {
+  high: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  moderate: "bg-amber-100 text-amber-700 border-amber-200",
+  low: "bg-orange-100 text-orange-700 border-orange-200",
+  very_low: "bg-rose-100 text-rose-700 border-rose-200",
+};
+
+
+function AnalysisResult({ result, onAnalyseAnother }) {
+  const a = result?.analysis;
+  if (!a) return null;
+  const progress = Number(a.predicted_progress_percentage || 0);
+  const confidence = Number(a.confidence_score || 0);
+  const probs = useMemo(() => {
+    const raw = a.raw_predictions || {};
+    return Object.entries(raw)
+      .filter(([k]) => k.startsWith("stage_"))
+      .sort((x, y) => Number(y[1]) - Number(x[1]))
+      .map(([k, v]) => ({
+        key: k,
+        label: STAGE_LABELS[k] || k,
+        value: Number(v),
+        pct: Math.round(Number(v) * 100),
+      }));
+  }, [a]);
+  const features = a.raw_predictions?.features;
+  const confLabel = result.confidence_label || "moderate";
+  const confChip = CONFIDENCE_STYLES[confLabel] || CONFIDENCE_STYLES.moderate;
+
+  return (
+    <div className="space-y-4">
+      <div className="card">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-xs uppercase tracking-wide text-slate-500">Predicted construction stage</div>
+            <div className="text-2xl font-bold text-slate-800 mt-1">{a.predicted_stage}</div>
+            {result.next_stage && (
+              <div className="text-xs text-slate-500 mt-1">
+                Next planned stage: <span className="font-medium">{result.next_stage}</span>
+              </div>
+            )}
+          </div>
+          <span className={`badge border ${confChip}`}>
+            confidence: {confLabel.replace("_", " ")} ({Math.round(confidence * 100)}%)
+          </span>
+        </div>
+
+        <div className="mt-5">
+          <div className="flex items-baseline justify-between mb-1">
+            <span className="text-xs uppercase tracking-wide text-slate-500">Estimated progress</span>
+            <span className="text-3xl font-bold text-ukwi-700">{progress.toFixed(1)}%</span>
+          </div>
+          <div className="h-3 rounded-full bg-slate-200 overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-ukwi-500 to-ukwi-300 transition-all"
+              style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {result.summary && (
+        <div className="card border-l-4 border-l-ukwi-500">
+          <div className="text-xs uppercase tracking-wide text-slate-500">AI summary</div>
+          <p className="text-sm text-slate-700 mt-1">{result.summary}</p>
+        </div>
+      )}
+
+      {result.advice && (
+        <div className="card border-l-4 border-l-amber-400 bg-amber-50/40">
+          <div className="text-xs uppercase tracking-wide text-amber-700 flex items-center gap-1">
+            💡 Recommended next step
+          </div>
+          <p className="text-sm text-slate-800 mt-1">{result.advice}</p>
+        </div>
+      )}
+
+      <div className="card">
+        <h3 className="font-semibold text-slate-800 mb-3">Per-stage probabilities</h3>
+        <ul className="space-y-2">
+          {probs.map((p, i) => (
+            <li key={p.key} className="text-sm">
+              <div className="flex justify-between text-xs text-slate-600 mb-1">
+                <span>{p.label}</span>
+                <span className={i === 0 ? "font-semibold text-ukwi-700" : ""}>{p.pct}%</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                <div
+                  className={`h-full ${i === 0 ? "bg-ukwi-500" : "bg-slate-300"}`}
+                  style={{ width: `${p.pct}%` }}
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {features && (
+        <details className="card">
+          <summary className="cursor-pointer font-semibold text-slate-700 text-sm">
+            Image features used by the model
+          </summary>
+          <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            {Object.entries(features).map(([k, v]) => (
+              <div key={k} className="rounded bg-slate-50 p-2">
+                <div className="text-slate-500 uppercase text-[10px] tracking-wide">{k.replace("_", " ")}</div>
+                <div className="font-mono text-slate-800">{Number(v).toFixed(3)}</div>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      <div className="text-xs text-slate-400 flex flex-wrap items-center gap-3">
+        <span>Model {a.model_version}</span>
+        <span>· {a.processing_time_ms} ms</span>
+        <span>· {new Date(a.analysis_date).toLocaleString()}</span>
+        <button
+          type="button"
+          onClick={onAnalyseAnother}
+          className="ml-auto text-ukwi-600 hover:underline"
+        >
+          Analyse another image →
+        </button>
+      </div>
+    </div>
+  );
+}
+
 
 export default function AIAnalysisPage() {
   const qc = useQueryClient();
-  const projects = useQuery({ queryKey: ["projects-min"], queryFn: () => projectsApi.list().then(r => r.data) });
+  const projects = useQuery({
+    queryKey: ["projects-min"],
+    queryFn: () => projectsApi.list().then((r) => r.data),
+  });
   const [projectId, setProjectId] = useState("");
   const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState(null);
   const [result, setResult] = useState(null);
-
-  const onPick = (f) => {
-    setFile(f);
-    setPreview(f ? URL.createObjectURL(f) : null);
-    setResult(null);
-  };
 
   const analyze = useMutation({
     mutationFn: async () => {
@@ -26,60 +163,97 @@ export default function AIAnalysisPage() {
     },
     onSuccess: (r) => {
       setResult(r.data);
-      // Invalidate the project's analysis-history cache so the next time the
-      // user opens the project's AI History tab they see this run.
       if (projectId) {
         qc.invalidateQueries({ queryKey: ["ai-hist", String(projectId)] });
         qc.invalidateQueries({ queryKey: ["ai-hist", Number(projectId)] });
+        qc.invalidateQueries({ queryKey: ["project", Number(projectId), "summary"] });
       }
       toast.success("Analysis complete");
     },
     onError: (e) => toast.error(e?.response?.data?.detail || "Analysis failed"),
   });
 
-  const a = result?.analysis;
+  const reset = () => {
+    setResult(null);
+    setFile(null);
+  };
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold">AI Analysis</h1>
-
-      <div className="card grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="label">Target project</label>
-          <select className="input" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-            <option value="">— select project —</option>
-            {(projects.data || []).map((p) => <option key={p.id} value={p.id}>{p.project_code} — {p.project_name}</option>)}
-          </select>
-          <label className="label mt-3">Site image</label>
-          <input type="file" accept="image/*" onChange={(e) => onPick(e.target.files[0])} />
-          <button disabled={!file || !projectId || analyze.isPending} className="btn-primary mt-3" onClick={() => analyze.mutate()}>
-            {analyze.isPending ? "Analyzing…" : "Run analysis"}
-          </button>
-        </div>
-        <div className="flex items-center justify-center bg-slate-100 rounded">
-          {preview ? <img src={preview} alt="" className="max-h-72 object-contain" /> : <div className="text-slate-400 text-sm py-12">No image selected</div>}
-        </div>
+    <div className="space-y-5 max-w-5xl">
+      <div>
+        <h1 className="text-2xl font-bold text-slate-800">AI Progress Analysis</h1>
+        <p className="text-sm text-slate-500 mt-1">
+          Capture or upload a site photo. The CNN classifies the construction stage, estimates
+          progress, and gives you the next-step recommendation.
+        </p>
       </div>
 
-      {a && (
-        <div className="card grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <div className="text-xs text-slate-500 uppercase">Predicted stage</div>
-            <div className="text-xl font-semibold">{a.predicted_stage}</div>
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+        <div className="lg:col-span-3 space-y-4">
+          <div className="card">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-slate-800">1. Site image</h2>
+              {file && (
+                <span className="text-xs text-slate-500">
+                  Ready · {file.name} ({(file.size / 1024).toFixed(0)} KB)
+                </span>
+              )}
+            </div>
+            <div className="mt-3">
+              <ImagePicker value={file} onChange={setFile} disabled={analyze.isPending} />
+            </div>
           </div>
-          <div>
-            <div className="text-xs text-slate-500 uppercase">Progress</div>
-            <div className="text-3xl font-bold text-ukwi-700">{Number(a.predicted_progress_percentage).toFixed(1)}%</div>
+
+          <div className="card">
+            <h2 className="font-semibold text-slate-800">2. Target project</h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Linking to a project saves the analysis to its history and updates cost forecasts.
+            </p>
+            <select
+              className="input mt-3"
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              disabled={analyze.isPending}
+            >
+              <option value="">— Stateless run (no save) —</option>
+              {(projects.data || []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.project_code} · {p.project_name}
+                </option>
+              ))}
+            </select>
           </div>
-          <div>
-            <div className="text-xs text-slate-500 uppercase">Confidence</div>
-            <div className="text-3xl font-bold text-emerald-600">{(Number(a.confidence_score) * 100).toFixed(1)}%</div>
-          </div>
-          <div className="md:col-span-3 text-sm text-slate-500">
-            Model: {a.model_version} · {a.processing_time_ms} ms · {new Date(a.analysis_date).toLocaleString()}
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => analyze.mutate()}
+              disabled={!file || !projectId || analyze.isPending}
+              className="btn-primary flex-1 sm:flex-none"
+              title={!projectId ? "Pick a project first" : ""}
+            >
+              {analyze.isPending ? "🤖 Analysing…" : "🤖 Run AI analysis"}
+            </button>
+            {result && (
+              <button type="button" onClick={reset} className="btn-secondary flex-1 sm:flex-none">
+                Start over
+              </button>
+            )}
           </div>
         </div>
-      )}
+
+        <div className="lg:col-span-2">
+          {result ? (
+            <AnalysisResult result={result} onAnalyseAnother={reset} />
+          ) : (
+            <div className="card border-dashed text-center text-slate-500 text-sm py-12">
+              <div className="text-4xl mb-2">🤖</div>
+              <div className="font-medium text-slate-700">No analysis yet</div>
+              <div className="mt-1">Upload or take a photo, choose a project, and run the AI to see results here.</div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
