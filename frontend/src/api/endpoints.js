@@ -111,11 +111,20 @@ export const notificationsApi = {
 // Download can use plain browser navigation — sidesteps fetch/XHR-with-blob
 // which can be killed by AV web-shields, extensions, or finicky dev proxies
 // (ERR_CONNECTION_RESET, "Failed to fetch", etc.).
-function _reportUrl(reportId, mode /* "download" | "view" */) {
+// Build a report URL (/view, /save, or /download) with the JWT in the
+// query string. Both /view and /save respond as text/html (the file is
+// embedded as a base64 data: URL inside the page) — that bypasses AV
+// web-shields that RST the connection on direct application/pdf
+// responses, and dodges every fetch/XHR-with-blob hazard at the same
+// time. /download is kept as a fallback for callers that want raw bytes.
+function _reportUrl(reportId, mode /* "view" | "save" | "download" */) {
   const base = import.meta.env.VITE_API_BASE_URL || "/api";
   const token = localStorage.getItem("ukwi_access_token") || "";
   const root = base.replace(/\/$/, "");
-  const path = mode === "view" ? "view" : "download";
+  const path =
+    mode === "view" ? "view" :
+    mode === "save" ? "save" :
+                       "download";
   return `${root}/reports/${reportId}/${path}?token=${encodeURIComponent(token)}`;
 }
 
@@ -126,30 +135,33 @@ export const reportsApi = {
   download: (id) => api.get(`/reports/${id}/download`, { responseType: "blob" }),
 
   /**
-   * Save a report to disk. Plain `<a download>` navigation with JWT in URL.
+   * Save a report to disk by opening the /save HTML wrapper in a new tab.
+   * The HTML page auto-clicks an `<a download>` pointing at the file
+   * embedded as a base64 data: URL — the binary never travels as
+   * application/pdf so AV web-shields don't reset the connection.
+   *
+   * The wrapper tab can be closed by the user once the file is saved.
    */
   saveToDisk: async (report) => {
-    const a = document.createElement("a");
-    a.href = _reportUrl(report.id, "download");
-    a.download = ""; // browser uses server's Content-Disposition filename
-    a.rel = "noopener noreferrer";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const url = _reportUrl(report.id, "save");
+    const win = window.open(url, "_blank", "noopener,noreferrer");
+    if (!win) {
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return { popupBlocked: true };
+    }
+    return { popupBlocked: false };
   },
 
   /**
-   * Open a report in a new tab. Hits the `/view` endpoint which serves
-   * the file wrapped in an HTML page (text/html, with the PDF embedded
-   * as a base64 data: URL inside an iframe). Two reasons:
-   *
-   * 1. text/html responses are not flagged by most AV web-shield modules
-   *    that intercept application/pdf and reset the connection.
-   * 2. Browsers' built-in PDF viewers handle data: URLs in iframes more
-   *    reliably than direct application/pdf navigations through a dev
-   *    proxy.
-   *
-   * window.open with <a target=_blank> fallback if a popup blocker fires.
+   * Open a report in a new tab using the /view HTML wrapper. PDFs render
+   * inside an iframe; Excel offers a download link inside the same page.
+   * Same AV-bypass logic as saveToDisk.
    */
   viewInBrowser: async (report) => {
     const url = _reportUrl(report.id, "view");

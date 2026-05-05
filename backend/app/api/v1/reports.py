@@ -133,6 +133,21 @@ def download(
     )
 
 
+def _html_wrapper(title: str, body: str) -> str:
+    """Tiny dark-themed HTML shell shared by /view and /save."""
+    return f"""<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><title>{title} — UKWI Monitor</title>
+<style>
+  html,body {{ margin:0; padding:0; height:100%; background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif }}
+  .msg {{ max-width:560px; margin:80px auto; padding:24px; background:#1e293b; border-radius:8px; text-align:center }}
+  .msg h1 {{ font-size:18px; margin:0 0 8px }}
+  .msg p  {{ color:#94a3b8; line-height:1.5 }}
+  .btn {{ display:inline-block; margin-top:16px; padding:10px 18px; background:#3a7ca5;
+         color:#fff; border-radius:6px; text-decoration:none; font-weight:600 }}
+  .btn:hover {{ background:#2c5d80 }}
+</style></head><body>{body}</body></html>"""
+
+
 @router.get("/reports/{report_id}/view")
 def view_in_html_wrapper(
     report_id: int,
@@ -140,16 +155,15 @@ def view_in_html_wrapper(
     user: Annotated[User, Depends(_user_for_download)],
 ):
     """Serve the report wrapped in an HTML page with the file embedded as a
-    base64 data: URL. This sidesteps two classes of failure:
+    base64 data: URL. This sidesteps:
 
-    - Some antivirus 'web shield' modules inspect application/pdf responses
-      and can RST the connection mid-way; an HTML page with text/html bypass
-      that.
-    - Some browsers' built-in PDF viewers misbehave under window.open of a
-      raw application/pdf response when served via a dev proxy.
+    - AV 'web shield' modules that inspect application/pdf responses and
+      can RST the connection (text/html is ignored by most).
+    - Browser PDF viewers that misbehave when window.open'd against a raw
+      application/pdf response through a dev proxy.
 
-    The embedded PDF / Excel data never leaves the user's browser as a
-    separate network request, so it's invisible to most middleware.
+    The embedded data never leaves the user's browser as a separate network
+    request — it's invisible to network middleware.
     """
     import base64
     r, data, media_type, p = _read_report(db, report_id)
@@ -158,31 +172,60 @@ def view_in_html_wrapper(
     b64 = base64.b64encode(data).decode("ascii")
     title = p.name
     is_pdf = media_type == "application/pdf"
-    body_html = (
+    body = (
         f'<iframe src="data:application/pdf;base64,{b64}" '
         f'style="border:0;width:100vw;height:100vh"></iframe>'
         if is_pdf
         else (
             f'<div class="msg">'
             f'  <h1>{title}</h1>'
-            f'  <p>This file type ({media_type}) cannot be previewed in the '
-            f'browser. Use the link below to download.</p>'
+            f'  <p>This file type ({media_type}) cannot be previewed inline in the browser.</p>'
             f'  <a class="btn" download="{title}" '
             f'     href="data:{media_type};base64,{b64}">⬇️ Download {title}</a>'
             f'</div>'
         )
     )
-    html = f"""<!doctype html><html lang="en"><head>
-<meta charset="utf-8"><title>{title} — UKWI Monitor</title>
-<style>
-  html,body {{ margin:0; padding:0; height:100%; background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif }}
-  .msg {{ max-width:560px; margin:80px auto; padding:24px; background:#1e293b; border-radius:8px }}
-  .msg h1 {{ font-size:18px; margin:0 0 8px }}
-  .msg p  {{ color:#94a3b8; line-height:1.5 }}
-  .btn {{ display:inline-block; margin-top:16px; padding:8px 14px; background:#3a7ca5;
-         color:#fff; border-radius:6px; text-decoration:none; font-weight:600 }}
-</style></head><body>{body_html}</body></html>"""
-    return Response(content=html, media_type="text/html; charset=utf-8")
+    return Response(content=_html_wrapper(title, body), media_type="text/html; charset=utf-8")
+
+
+@router.get("/reports/{report_id}/save")
+def save_via_html_wrapper(
+    report_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(_user_for_download)],
+):
+    """Trigger a Save-As via an HTML page that auto-clicks an `<a download>`
+    pointing at the file embedded as a base64 data: URL.
+
+    Same rationale as /view — the network response is text/html, the
+    actual binary never crosses the wire as application/pdf, so AV
+    web-shields don't reset the connection.
+    """
+    import base64
+    r, data, media_type, p = _read_report(db, report_id)
+    log_action(db, user.id, "report.download", "report", r.id)
+    db.commit()
+    b64 = base64.b64encode(data).decode("ascii")
+    title = p.name
+    body = f"""<div class="msg">
+      <h1>📄 Saving {title}…</h1>
+      <p>If your download doesn't start automatically, click the button below.</p>
+      <a id="dl" class="btn" download="{title}" href="data:{media_type};base64,{b64}">
+        ⬇️ Download {title}
+      </a>
+      <p style="margin-top:24px;font-size:12px;color:#64748b">
+        You can close this tab once the file is saved.
+      </p>
+    </div>
+    <script>
+      // Trigger the download programmatically the moment the page loads.
+      // Some browsers require a synthetic click on a real anchor element.
+      window.addEventListener('load', function() {{
+        var a = document.getElementById('dl');
+        if (a) a.click();
+      }});
+    </script>"""
+    return Response(content=_html_wrapper(title, body), media_type="text/html; charset=utf-8")
 
 
 @router.post("/projects/{project_id}/reports/progress", response_model=ReportOut, status_code=status.HTTP_201_CREATED)
