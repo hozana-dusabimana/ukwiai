@@ -1,5 +1,5 @@
 from app.models.user import User, UserRole
-from app.models.project import Project, ProjectStatus, CourtType
+from app.models.project import Project, ProjectStatus, CourtType, ProjectAssignee
 from app.models.stage import ConstructionStage, ProjectStage, ProjectStageStatus
 from app.models.image import SiteImage
 from app.models.analysis import ProgressAnalysis
@@ -12,7 +12,7 @@ from app.models.notification import Notification
 
 __all__ = [
     "User", "UserRole",
-    "Project", "ProjectStatus", "CourtType",
+    "Project", "ProjectStatus", "CourtType", "ProjectAssignee",
     "ConstructionStage", "ProjectStage", "ProjectStageStatus",
     "SiteImage",
     "ProgressAnalysis",

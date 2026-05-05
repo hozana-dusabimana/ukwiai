@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import CurrentUser, require_manager_or_admin
-from app.models.project import Project, ProjectStatus
+from app.models.project import Project, ProjectStatus, ProjectAssignee
 from app.models.user import User, UserRole
 from app.models.stage import ConstructionStage, ProjectStage
 from app.models.image import SiteImage
@@ -15,7 +15,10 @@ from app.models.alert import Alert
 from app.models.analysis import ProgressAnalysis
 from app.models.cost import CostEstimation
 from app.models.budget import BudgetRecord
-from app.schemas.project import ProjectCreate, ProjectUpdate, ProjectOut, ProjectStatusUpdate, ProjectSummary
+from app.schemas.project import (
+    ProjectCreate, ProjectUpdate, ProjectOut, ProjectStatusUpdate, ProjectSummary,
+    AssigneeIn, AssigneeOut,
+)
 from app.services.cost_estimation import total_recorded_expenses
 from app.services.audit import log_action
 
@@ -23,10 +26,36 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 
 def _scope_to_user(stmt, user: User):
-    """Viewers only see projects they created. Engineers/PMs/admins see all."""
-    if user.role == UserRole.viewer:
-        stmt = stmt.where(Project.created_by == user.id)
-    return stmt
+    """Per-project membership scoping (Option B).
+
+    Admin sees every project. Everyone else (PM, engineer, viewer) sees only
+    the projects they're an `ProjectAssignee` of. The project's creator is
+    auto-added as an assignee at creation time, so 'creator' and 'assignee'
+    collapse into a single membership check here.
+    """
+    if user.role == UserRole.admin:
+        return stmt
+    member_ids = select(ProjectAssignee.project_id).where(ProjectAssignee.user_id == user.id)
+    return stmt.where(Project.id.in_(member_ids))
+
+
+def _user_can_access(db: Session, project: Project, user: User) -> bool:
+    """True if `user` should be able to read this project."""
+    if user.role == UserRole.admin:
+        return True
+    return db.scalar(
+        select(ProjectAssignee.id).where(
+            ProjectAssignee.project_id == project.id,
+            ProjectAssignee.user_id == user.id,
+        )
+    ) is not None
+
+
+def _user_can_manage_team(db: Session, project: Project, user: User) -> bool:
+    """Owners (creator) and admins can add/remove assignees."""
+    if user.role == UserRole.admin:
+        return True
+    return project.created_by == user.id
 
 
 @router.get("", response_model=list[ProjectOut])
@@ -54,8 +83,8 @@ def get_project(project_id: int, db: Annotated[Session, Depends(get_db)], user: 
     p = db.get(Project, project_id)
     if not p:
         raise HTTPException(404, "Project not found")
-    if user.role == UserRole.viewer and p.created_by != user.id:
-        raise HTTPException(403, "Forbidden")
+    if not _user_can_access(db, p, user):
+        raise HTTPException(403, "You are not assigned to this project.")
     return p
 
 
@@ -80,6 +109,10 @@ def create_project(
             allocated_budget=(p.total_budget or Decimal("0")) * (s.expected_cost_percentage / Decimal("100")),
         )
         db.add(ps)
+
+    # Owner is auto-added as an assignee so they can access the project under
+    # the new membership-based scoping rule. Admins implicitly have access.
+    db.add(ProjectAssignee(project_id=p.id, user_id=user.id, assigned_by=user.id))
 
     log_action(db, user.id, "project.create", "project", p.id, details={"name": p.project_name})
     db.commit()
@@ -221,3 +254,108 @@ def stages_progress(project_id: int, db: Annotated[Session, Depends(get_db)], us
         "completed_stages": completed,
         "progress_percent_by_stage_count": (completed / len(timeline) * 100) if timeline else 0.0,
     }
+
+
+# ----------------------------- assignees / team --------------------------- #
+
+def _serialise_assignee(a: ProjectAssignee, u: User) -> AssigneeOut:
+    return AssigneeOut(
+        id=a.id,
+        project_id=a.project_id,
+        user_id=a.user_id,
+        user_full_name=u.full_name,
+        user_email=u.email,
+        user_role=u.role.value if hasattr(u.role, "value") else str(u.role),
+        assigned_by=a.assigned_by,
+        assigned_at=a.assigned_at,
+    )
+
+
+@router.get("/{project_id}/assignees", response_model=list[AssigneeOut])
+def list_assignees(
+    project_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
+):
+    p = db.get(Project, project_id)
+    if not p:
+        raise HTTPException(404, "Project not found")
+    if not _user_can_access(db, p, user):
+        raise HTTPException(403, "You are not assigned to this project.")
+    rows = db.scalars(
+        select(ProjectAssignee).where(ProjectAssignee.project_id == project_id)
+    ).all()
+    out: list[AssigneeOut] = []
+    for a in rows:
+        u = db.get(User, a.user_id)
+        if u is None:
+            continue
+        out.append(_serialise_assignee(a, u))
+    return out
+
+
+@router.post("/{project_id}/assignees", response_model=AssigneeOut, status_code=status.HTTP_201_CREATED)
+def add_assignee(
+    project_id: int,
+    payload: AssigneeIn,
+    db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
+):
+    p = db.get(Project, project_id)
+    if not p:
+        raise HTTPException(404, "Project not found")
+    if not _user_can_manage_team(db, p, user):
+        raise HTTPException(403, "Only the project owner or an admin can manage the team.")
+    target = db.get(User, payload.user_id)
+    if target is None or not target.is_active:
+        raise HTTPException(404, "User not found or inactive")
+    existing = db.scalar(
+        select(ProjectAssignee).where(
+            ProjectAssignee.project_id == project_id,
+            ProjectAssignee.user_id == payload.user_id,
+        )
+    )
+    if existing is not None:
+        return _serialise_assignee(existing, target)
+    a = ProjectAssignee(
+        project_id=project_id, user_id=payload.user_id, assigned_by=user.id
+    )
+    db.add(a)
+    db.flush()
+    log_action(
+        db, user.id, "project.assignee_add", "project", project_id,
+        details={"user_id": payload.user_id},
+    )
+    db.commit()
+    db.refresh(a)
+    return _serialise_assignee(a, target)
+
+
+@router.delete("/{project_id}/assignees/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_assignee(
+    project_id: int,
+    user_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
+):
+    p = db.get(Project, project_id)
+    if not p:
+        raise HTTPException(404, "Project not found")
+    if not _user_can_manage_team(db, p, user):
+        raise HTTPException(403, "Only the project owner or an admin can manage the team.")
+    if user_id == p.created_by:
+        raise HTTPException(400, "Cannot remove the project owner.")
+    a = db.scalar(
+        select(ProjectAssignee).where(
+            ProjectAssignee.project_id == project_id,
+            ProjectAssignee.user_id == user_id,
+        )
+    )
+    if a is None:
+        raise HTTPException(404, "Assignee not found")
+    db.delete(a)
+    log_action(
+        db, user.id, "project.assignee_remove", "project", project_id,
+        details={"user_id": user_id},
+    )
+    db.commit()

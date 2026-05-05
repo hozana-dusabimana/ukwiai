@@ -59,3 +59,19 @@ class ProjectSummary(BaseModel):
     images_count: int
     alerts_count: int
     open_alerts_count: int
+
+
+class AssigneeIn(BaseModel):
+    user_id: int
+
+
+class AssigneeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    project_id: int
+    user_id: int
+    user_full_name: str
+    user_email: str
+    user_role: str
+    assigned_by: int
+    assigned_at: datetime

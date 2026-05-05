@@ -36,6 +36,10 @@ export const projectsApi = {
   summary: (id) => api.get(`/projects/${id}/summary`),
   timeline: (id) => api.get(`/projects/${id}/timeline`),
   stages: (id) => api.get(`/projects/${id}/stages`),
+  // Per-project membership (Option B scoping)
+  assignees: (id) => api.get(`/projects/${id}/assignees`),
+  addAssignee: (id, user_id) => api.post(`/projects/${id}/assignees`, { user_id }),
+  removeAssignee: (id, user_id) => api.delete(`/projects/${id}/assignees/${user_id}`),
 };
 
 export const stagesApi = {

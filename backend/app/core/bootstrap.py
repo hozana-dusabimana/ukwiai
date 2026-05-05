@@ -19,6 +19,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.security import hash_password
+from app.models.project import Project, ProjectAssignee
 from app.models.stage import ConstructionStage
 from app.models.user import User, UserRole
 
@@ -147,6 +148,26 @@ def _seed(session_factory) -> None:
                 ))
                 logger.info("Seeded default admin %s (CHANGE THIS PASSWORD AFTER FIRST LOGIN)", DEFAULT_ADMIN_EMAIL)
             db.commit()
+
+            # Backfill: every existing project must have its creator as an
+            # assignee under the new membership-scoped access rules. Idempotent
+            # — only inserts the missing rows.
+            backfilled = 0
+            for proj in db.query(Project).all():
+                exists = db.query(ProjectAssignee).filter(
+                    ProjectAssignee.project_id == proj.id,
+                    ProjectAssignee.user_id == proj.created_by,
+                ).first()
+                if exists is None:
+                    db.add(ProjectAssignee(
+                        project_id=proj.id,
+                        user_id=proj.created_by,
+                        assigned_by=proj.created_by,
+                    ))
+                    backfilled += 1
+            if backfilled:
+                db.commit()
+                logger.info("Backfilled %d project_assignees rows for existing projects", backfilled)
         finally:
             if is_mysql:
                 db.execute(text("SELECT RELEASE_LOCK(:n)"), {"n": lock_name})

@@ -3,8 +3,9 @@ import { useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-toastify";
 import {
-  projectsApi, budgetApi, costApi, aiApi, imagesApi, alertsApi, reportsApi,
+  projectsApi, budgetApi, costApi, aiApi, imagesApi, alertsApi, reportsApi, usersApi,
 } from "../api/endpoints";
+import { useAuth } from "../contexts/AuthContext";
 import StatusBadge from "../components/StatusBadge";
 import RoleGate from "../components/RoleGate";
 import ImagePicker from "../components/ImagePicker";
@@ -21,7 +22,7 @@ function ReadOnlyHint({ message = "Read-only — your role can browse but cannot
   );
 }
 
-const tabs = ["Overview", "Stages", "Images", "Budget", "AI History", "Reports"];
+const tabs = ["Overview", "Stages", "Images", "Budget", "AI History", "Reports", "Team"];
 
 export default function ProjectDetailPage() {
   const { id } = useParams();
@@ -67,6 +68,7 @@ export default function ProjectDetailPage() {
       {tab === "Budget" && <BudgetTab projectId={projectId} />}
       {tab === "AI History" && <AIHistoryTab projectId={projectId} />}
       {tab === "Reports" && <ReportsTab projectId={projectId} />}
+      {tab === "Team" && <TeamTab projectId={projectId} project={p} />}
     </div>
   );
 }
@@ -433,6 +435,184 @@ function ReportsTab({ projectId }) {
           ))}
           {(!list.data || list.data.length === 0) && <li className="py-2 text-slate-500 text-sm">No reports yet.</li>}
         </ul>
+      </div>
+    </div>
+  );
+}
+
+
+const ROLE_BADGE = {
+  admin: "bg-rose-100 text-rose-700 border-rose-200",
+  project_manager: "bg-ukwi-100 text-ukwi-700 border-ukwi-200",
+  engineer: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  viewer: "bg-slate-100 text-slate-700 border-slate-200",
+};
+
+
+function TeamTab({ projectId, project }) {
+  const qc = useQueryClient();
+  const { user, hasRole } = useAuth();
+  const canManage =
+    hasRole("admin") || (project && user && project.created_by === user.id);
+
+  const list = useQuery({
+    queryKey: ["assignees", projectId],
+    queryFn: () => projectsApi.assignees(projectId).then((r) => r.data),
+  });
+  const allUsers = useQuery({
+    queryKey: ["users-min"],
+    queryFn: () => usersApi.list().then((r) => r.data),
+    enabled: canManage,
+  });
+
+  const [pickedUserId, setPickedUserId] = useState("");
+
+  const add = useMutation({
+    mutationFn: (uid) => projectsApi.addAssignee(projectId, Number(uid)),
+    onSuccess: () => {
+      toast.success("User added to project");
+      qc.invalidateQueries({ queryKey: ["assignees", projectId] });
+      setPickedUserId("");
+    },
+    onError: (e) =>
+      toast.error(e?.response?.data?.detail || "Could not add user"),
+  });
+
+  const remove = useMutation({
+    mutationFn: (uid) => projectsApi.removeAssignee(projectId, uid),
+    onSuccess: () => {
+      toast.success("Removed from project");
+      qc.invalidateQueries({ queryKey: ["assignees", projectId] });
+    },
+    onError: (e) =>
+      toast.error(e?.response?.data?.detail || "Could not remove"),
+  });
+
+  const assignedIds = new Set((list.data || []).map((a) => a.user_id));
+  const candidates = (allUsers.data || []).filter(
+    (u) => u.is_active && !assignedIds.has(u.id) && u.role !== "admin"
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="card">
+        <h3 className="font-semibold text-slate-800">Project team</h3>
+        <p className="text-xs text-slate-500 mt-1">
+          Only users on this list can see this project. The project owner
+          (creator) cannot be removed. Admins always have access regardless.
+        </p>
+      </div>
+
+      {canManage && (
+        <div className="card">
+          <h4 className="font-semibold text-sm text-slate-800 mb-2">
+            Assign someone to this project
+          </h4>
+          <div className="flex flex-wrap gap-2 items-end">
+            <div className="flex-1 min-w-[220px]">
+              <select
+                className="input"
+                value={pickedUserId}
+                onChange={(e) => setPickedUserId(e.target.value)}
+              >
+                <option value="">— pick a teammate —</option>
+                {candidates.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.full_name} · {u.email} · {String(u.role).replace("_", " ")}
+                  </option>
+                ))}
+              </select>
+              {candidates.length === 0 && (
+                <p className="text-xs text-slate-400 mt-1">
+                  Everyone available is already on this project.
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!pickedUserId || add.isPending}
+              onClick={() => add.mutate(pickedUserId)}
+            >
+              {add.isPending ? "Adding…" : "+ Add to team"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="card p-0 overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100">
+          <div className="flex items-baseline justify-between">
+            <h4 className="font-semibold text-slate-800">
+              Members ({(list.data || []).length})
+            </h4>
+            {!canManage && (
+              <span className="text-xs text-slate-500">View-only</span>
+            )}
+          </div>
+        </div>
+        {list.isLoading ? (
+          <div className="p-4 text-slate-500 text-sm">Loading…</div>
+        ) : (list.data || []).length === 0 ? (
+          <div className="p-6 text-center text-slate-500 text-sm">
+            No team members yet.
+          </div>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {list.data.map((a) => {
+              const initials = a.user_full_name
+                .split(" ")
+                .map((s) => s[0])
+                .filter(Boolean)
+                .slice(0, 2)
+                .join("")
+                .toUpperCase();
+              const isOwner = project && project.created_by === a.user_id;
+              return (
+                <li key={a.id} className="p-3 flex items-center gap-3">
+                  <span className="w-9 h-9 rounded-full bg-gradient-to-br from-ukwi-500 to-ukwi-700 text-white text-xs font-bold flex items-center justify-center flex-shrink-0">
+                    {initials}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-slate-800 truncate">
+                        {a.user_full_name}
+                      </span>
+                      {isOwner && (
+                        <span className="badge bg-amber-100 text-amber-700 border border-amber-200">
+                          Owner
+                        </span>
+                      )}
+                      <span
+                        className={`badge border capitalize ${
+                          ROLE_BADGE[a.user_role] || "bg-slate-100 text-slate-700"
+                        }`}
+                      >
+                        {String(a.user_role).replace("_", " ")}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-500 truncate">
+                      {a.user_email}
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      Added {new Date(a.assigned_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                  {canManage && !isOwner && (
+                    <button
+                      type="button"
+                      onClick={() => remove.mutate(a.user_id)}
+                      disabled={remove.isPending}
+                      className="text-rose-600 hover:underline text-xs"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
     </div>
   );

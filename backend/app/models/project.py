@@ -2,7 +2,8 @@ from datetime import datetime, date
 from decimal import Decimal
 import enum
 from sqlalchemy import (
-    String, DateTime, Date, Numeric, Enum as SAEnum, Integer, Text, ForeignKey, func,
+    String, DateTime, Date, Numeric, Enum as SAEnum, Integer, Text, ForeignKey,
+    UniqueConstraint, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -50,7 +51,7 @@ class Project(Base):
         DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
-    creator = relationship("User", back_populates="projects")
+    creator = relationship("User", back_populates="projects", foreign_keys=[created_by])
     project_stages = relationship("ProjectStage", back_populates="project", cascade="all, delete-orphan")
     images = relationship("SiteImage", back_populates="project", cascade="all, delete-orphan")
     analyses = relationship("ProgressAnalysis", back_populates="project", cascade="all, delete-orphan")
@@ -58,3 +59,40 @@ class Project(Base):
     estimations = relationship("CostEstimation", back_populates="project", cascade="all, delete-orphan")
     alerts = relationship("Alert", back_populates="project", cascade="all, delete-orphan")
     reports = relationship("Report", back_populates="project", cascade="all, delete-orphan")
+    assignees = relationship(
+        "ProjectAssignee", back_populates="project", cascade="all, delete-orphan",
+        foreign_keys="ProjectAssignee.project_id",
+    )
+
+
+class ProjectAssignee(Base):
+    """Per-project access list. A user appears here exactly when they should
+    see + work on this project. Admins bypass this table entirely.
+
+    The project owner (created_by) is auto-added on project creation, so the
+    "owner sees their own project" rule and the "assignee sees the project"
+    rule collapse into a single check at the query layer.
+    """
+
+    __tablename__ = "project_assignees"
+    __table_args__ = (
+        UniqueConstraint("project_id", "user_id", name="uq_project_user"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    assigned_by: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=False
+    )
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+    project = relationship("Project", back_populates="assignees", foreign_keys=[project_id])
+    user = relationship("User", foreign_keys=[user_id])
+    assigner = relationship("User", foreign_keys=[assigned_by])
