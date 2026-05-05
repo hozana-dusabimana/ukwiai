@@ -17,6 +17,7 @@ from app.models.user import User
 from app.schemas.image import SiteImageOut
 from app.services.storage import save_image_bytes
 from app.services.audit import log_action
+from app.services.access import user_can_access
 
 router = APIRouter(tags=["images"])
 
@@ -25,8 +26,8 @@ def _check_project_access(db: Session, project_id: int, user: User) -> Project:
     p = db.get(Project, project_id)
     if not p:
         raise HTTPException(404, "Project not found")
-    if user.role.value == "viewer" and p.created_by != user.id:
-        raise HTTPException(403, "Forbidden")
+    if not user_can_access(db, project_id, user):
+        raise HTTPException(403, "You are not assigned to this project.")
     return p
 
 

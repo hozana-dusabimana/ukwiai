@@ -17,6 +17,7 @@ from app.models.user import User
 from app.schemas.report import ReportGenerateRequest, ReportOut
 from app.services.reports import generate_pdf_report, generate_excel_report
 from app.services.audit import log_action
+from app.services.access import user_can_access, scope_projects
 
 router = APIRouter(tags=["reports"])
 
@@ -30,6 +31,8 @@ def generate_report(
     p = db.get(Project, payload.project_id)
     if not p:
         raise HTTPException(404, "Project not found")
+    if not user_can_access(db, payload.project_id, user):
+        raise HTTPException(403, "You are not assigned to this project.")
     if payload.format == "pdf":
         rep = generate_pdf_report(db, p, user.id, payload.report_type)
     else:
@@ -48,8 +51,16 @@ def list_reports(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
 ):
+    # Membership-scoped: only list reports for projects the caller can see.
+    allowed_ids = list(db.scalars(scope_projects(select(Project.id), user)).all())
     stmt = select(Report)
+    if user.role.value != "admin":
+        if not allowed_ids:
+            return []
+        stmt = stmt.where(Report.project_id.in_(allowed_ids))
     if project_id:
+        if user.role.value != "admin" and project_id not in allowed_ids:
+            return []
         stmt = stmt.where(Report.project_id == project_id)
     return db.scalars(stmt.order_by(desc(Report.generated_at)).offset(skip).limit(limit)).all()
 
@@ -91,11 +102,14 @@ def _user_for_download(
     return u
 
 
-def _read_report(db: Session, report_id: int) -> tuple[Report, bytes, str, Path]:
-    """Common loader: 404/410 + bytes + media type + path."""
+def _read_report(db: Session, report_id: int, user: User) -> tuple[Report, bytes, str, Path]:
+    """Common loader: 404/410 + bytes + media type + path. Enforces project
+    membership so a viewer can't grab files from a project they're not on."""
     r = db.get(Report, report_id)
     if not r:
         raise HTTPException(404, "Report not found")
+    if r.project_id is not None and not user_can_access(db, r.project_id, user):
+        raise HTTPException(403, "You are not assigned to this project.")
     p = Path(r.file_path)
     if not p.exists():
         raise HTTPException(410, "Report file no longer exists")
@@ -117,7 +131,7 @@ def download(
     the JS-with-Authorization-header path is blocked by AV, extensions, or
     a finicky dev proxy.
     """
-    r, data, media_type, p = _read_report(db, report_id)
+    r, data, media_type, p = _read_report(db, report_id, user)
     safe_name = quote(p.name)
     log_action(db, user.id, "report.download", "report", r.id)
     db.commit()
@@ -166,7 +180,7 @@ def view_in_html_wrapper(
     request — it's invisible to network middleware.
     """
     import base64
-    r, data, media_type, p = _read_report(db, report_id)
+    r, data, media_type, p = _read_report(db, report_id, user)
     log_action(db, user.id, "report.view", "report", r.id)
     db.commit()
     b64 = base64.b64encode(data).decode("ascii")
@@ -202,7 +216,7 @@ def save_via_html_wrapper(
     web-shields don't reset the connection.
     """
     import base64
-    r, data, media_type, p = _read_report(db, report_id)
+    r, data, media_type, p = _read_report(db, report_id, user)
     log_action(db, user.id, "report.download", "report", r.id)
     db.commit()
     b64 = base64.b64encode(data).decode("ascii")
@@ -237,6 +251,8 @@ def progress_pdf(
     p = db.get(Project, project_id)
     if not p:
         raise HTTPException(404, "Project not found")
+    if not user_can_access(db, project_id, user):
+        raise HTTPException(403, "You are not assigned to this project.")
     rep = generate_pdf_report(db, p, user.id, "progress")
     db.commit()
     db.refresh(rep)
@@ -253,6 +269,8 @@ def budget_report(
     p = db.get(Project, project_id)
     if not p:
         raise HTTPException(404, "Project not found")
+    if not user_can_access(db, project_id, user):
+        raise HTTPException(403, "You are not assigned to this project.")
     rep = generate_pdf_report(db, p, user.id, "budget") if fmt == "pdf" else generate_excel_report(db, p, user.id, "budget")
     db.commit()
     db.refresh(rep)
@@ -268,6 +286,8 @@ def full_report(
     p = db.get(Project, project_id)
     if not p:
         raise HTTPException(404, "Project not found")
+    if not user_can_access(db, project_id, user):
+        raise HTTPException(403, "You are not assigned to this project.")
     rep = generate_pdf_report(db, p, user.id, "full")
     db.commit()
     db.refresh(rep)

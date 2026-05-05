@@ -12,16 +12,24 @@ from app.models.stage import ConstructionStage, ProjectStage
 from app.models.user import User
 from app.schemas.budget import ExpenseCreate, ExpenseUpdate, ExpenseOut, BudgetSummary
 from app.services.audit import log_action
+from app.services.access import user_can_access
 from app.services.cost_estimation import total_recorded_expenses
 
 router = APIRouter(tags=["budget"])
 
 
-@router.get("/projects/{project_id}/budget")
-def project_budget(project_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
+def _load_project_or_403(db: Session, project_id: int, user: User) -> Project:
     p = db.get(Project, project_id)
     if not p:
         raise HTTPException(404, "Project not found")
+    if not user_can_access(db, project_id, user):
+        raise HTTPException(403, "You are not assigned to this project.")
+    return p
+
+
+@router.get("/projects/{project_id}/budget")
+def project_budget(project_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
+    p = _load_project_or_403(db, project_id, user)
     spent = total_recorded_expenses(db, project_id)
     return {
         "project_id": project_id,
@@ -43,9 +51,7 @@ def add_expense(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(require_engineer_plus)],
 ):
-    p = db.get(Project, project_id)
-    if not p:
-        raise HTTPException(404, "Project not found")
+    _load_project_or_403(db, project_id, user)
 
     expense = BudgetRecord(
         project_id=project_id,
@@ -85,6 +91,7 @@ def list_expenses(
     limit: int = Query(100, ge=1, le=500),
     category: ExpenseCategory | None = None,
 ):
+    _load_project_or_403(db, project_id, user)
     stmt = select(BudgetRecord).where(BudgetRecord.project_id == project_id)
     if category:
         stmt = stmt.where(BudgetRecord.expense_category == category)
@@ -126,9 +133,7 @@ def delete_expense(
 
 @router.get("/projects/{project_id}/budget/summary", response_model=BudgetSummary)
 def budget_summary(project_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
-    p = db.get(Project, project_id)
-    if not p:
-        raise HTTPException(404, "Project not found")
+    p = _load_project_or_403(db, project_id, user)
     spent = total_recorded_expenses(db, project_id)
     by_cat_rows = db.execute(
         select(BudgetRecord.expense_category, func.coalesce(func.sum(BudgetRecord.amount), 0))
@@ -159,6 +164,7 @@ def budget_summary(project_id: int, db: Annotated[Session, Depends(get_db)], use
 @router.get("/projects/{project_id}/budget/breakdown")
 def breakdown(project_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
     """Allocated vs actual cost per stage."""
+    _load_project_or_403(db, project_id, user)
     rows = db.execute(
         select(
             ConstructionStage.stage_name,

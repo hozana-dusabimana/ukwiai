@@ -21,34 +21,19 @@ from app.schemas.project import (
 )
 from app.services.cost_estimation import total_recorded_expenses
 from app.services.audit import log_action
+from app.services.access import scope_projects, user_can_access
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
+# Project listing/visibility uses the shared `scope_projects` helper from
+# `services.access` so dashboard, budget, alerts, etc. apply the same rule.
 def _scope_to_user(stmt, user: User):
-    """Per-project membership scoping (Option B).
-
-    Admin sees every project. Everyone else (PM, engineer, viewer) sees only
-    the projects they're an `ProjectAssignee` of. The project's creator is
-    auto-added as an assignee at creation time, so 'creator' and 'assignee'
-    collapse into a single membership check here.
-    """
-    if user.role == UserRole.admin:
-        return stmt
-    member_ids = select(ProjectAssignee.project_id).where(ProjectAssignee.user_id == user.id)
-    return stmt.where(Project.id.in_(member_ids))
+    return scope_projects(stmt, user)
 
 
 def _user_can_access(db: Session, project: Project, user: User) -> bool:
-    """True if `user` should be able to read this project."""
-    if user.role == UserRole.admin:
-        return True
-    return db.scalar(
-        select(ProjectAssignee.id).where(
-            ProjectAssignee.project_id == project.id,
-            ProjectAssignee.user_id == user.id,
-        )
-    ) is not None
+    return user_can_access(db, project.id, user)
 
 
 def _user_can_manage_team(db: Session, project: Project, user: User) -> bool:
@@ -177,8 +162,8 @@ def project_summary(project_id: int, db: Annotated[Session, Depends(get_db)], us
     p = db.get(Project, project_id)
     if not p:
         raise HTTPException(404, "Project not found")
-    if user.role == UserRole.viewer and p.created_by != user.id:
-        raise HTTPException(403, "Forbidden")
+    if not _user_can_access(db, p, user):
+        raise HTTPException(403, "You are not assigned to this project.")
 
     total_spent = total_recorded_expenses(db, p.id)
     latest_a = db.scalars(
@@ -214,8 +199,8 @@ def project_timeline(project_id: int, db: Annotated[Session, Depends(get_db)], u
     p = db.get(Project, project_id)
     if not p:
         raise HTTPException(404, "Project not found")
-    if user.role == UserRole.viewer and p.created_by != user.id:
-        raise HTTPException(403, "Forbidden")
+    if not _user_can_access(db, p, user):
+        raise HTTPException(403, "You are not assigned to this project.")
     rows = db.execute(
         select(ProjectStage, ConstructionStage)
         .join(ConstructionStage, ProjectStage.stage_id == ConstructionStage.id)

@@ -14,8 +14,18 @@ from app.schemas.cost import CostEstimationOut, CostComparison
 from app.services.cost_estimation import compute_cost_estimation, total_recorded_expenses
 from app.services.alerts import evaluate_cost_alerts
 from app.services.audit import log_action
+from app.services.access import user_can_access
 
 router = APIRouter(tags=["cost"])
+
+
+def _load_project_or_403(db: Session, project_id: int, user: User) -> Project:
+    p = db.get(Project, project_id)
+    if not p:
+        raise HTTPException(404, "Project not found")
+    if not user_can_access(db, project_id, user):
+        raise HTTPException(403, "You are not assigned to this project.")
+    return p
 
 
 @router.post("/projects/{project_id}/estimate-cost", response_model=CostEstimationOut)
@@ -25,9 +35,7 @@ def estimate_cost(
     user: Annotated[User, Depends(require_engineer_plus)],
 ):
     """Recompute and persist a cost estimation using the latest AI analysis."""
-    p = db.get(Project, project_id)
-    if not p:
-        raise HTTPException(404, "Project not found")
+    p = _load_project_or_403(db, project_id, user)
     latest = db.scalars(
         select(ProgressAnalysis)
         .where(ProgressAnalysis.project_id == project_id)
@@ -44,9 +52,7 @@ def estimate_cost(
 
 @router.get("/projects/{project_id}/cost-comparison", response_model=CostComparison)
 def cost_comparison(project_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
-    p = db.get(Project, project_id)
-    if not p:
-        raise HTTPException(404, "Project not found")
+    p = _load_project_or_403(db, project_id, user)
     e = db.scalars(
         select(CostEstimation).where(CostEstimation.project_id == project_id)
         .order_by(desc(CostEstimation.generated_at)).limit(1)
@@ -73,9 +79,7 @@ def cost_comparison(project_id: int, db: Annotated[Session, Depends(get_db)], us
 
 @router.get("/projects/{project_id}/remaining-budget")
 def remaining_budget(project_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
-    p = db.get(Project, project_id)
-    if not p:
-        raise HTTPException(404, "Project not found")
+    p = _load_project_or_403(db, project_id, user)
     spent = total_recorded_expenses(db, project_id)
     return {
         "total_budget": float(p.total_budget or 0),
@@ -87,9 +91,7 @@ def remaining_budget(project_id: int, db: Annotated[Session, Depends(get_db)], u
 
 @router.get("/projects/{project_id}/cost-forecast")
 def cost_forecast(project_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
-    p = db.get(Project, project_id)
-    if not p:
-        raise HTTPException(404, "Project not found")
+    p = _load_project_or_403(db, project_id, user)
     latest = db.scalars(
         select(ProgressAnalysis).where(ProgressAnalysis.project_id == project_id)
         .order_by(desc(ProgressAnalysis.analysis_date)).limit(1)
@@ -113,6 +115,7 @@ def variance_analysis(
     user: CurrentUser,
 ):
     """Time series of past variance snapshots for charting."""
+    _load_project_or_403(db, project_id, user)
     rows = db.scalars(
         select(CostEstimation).where(CostEstimation.project_id == project_id)
         .order_by(CostEstimation.generated_at).limit(200)

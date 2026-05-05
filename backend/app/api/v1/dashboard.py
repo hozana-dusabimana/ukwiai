@@ -12,16 +12,16 @@ from app.models.budget import BudgetRecord
 from app.models.analysis import ProgressAnalysis
 from app.models.cost import CostEstimation, DeviationStatus
 from app.models.alert import Alert
-from app.models.user import UserRole
 from app.schemas.dashboard import DashboardOverview
+from app.services.access import scope_projects
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
 def _scope(stmt, user):
-    if user.role == UserRole.viewer:
-        stmt = stmt.where(Project.created_by == user.id)
-    return stmt
+    """Membership-aware filter: admin sees all, everyone else sees only the
+    projects they are assigned to."""
+    return scope_projects(stmt, user)
 
 
 @router.get("/overview", response_model=DashboardOverview)

@@ -18,6 +18,7 @@ from app.services.ai_client import ai_client, AIServiceError
 from app.services.cost_estimation import compute_cost_estimation
 from app.services.alerts import evaluate_cost_alerts
 from app.services.audit import log_action
+from app.services.access import user_can_access
 from app.services.storage import read_image_bytes, save_image_bytes
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -51,6 +52,8 @@ async def analyze_image(
         image = db.get(SiteImage, image_id)
         if not image:
             raise HTTPException(404, "Image not found")
+        if not user_can_access(db, image.project_id, user):
+            raise HTTPException(403, "You are not assigned to this project.")
         proj = db.get(Project, image.project_id)
         img_bytes = read_image_bytes(image.image_path)
         filename = image.original_filename or "image.jpg"
@@ -60,6 +63,8 @@ async def analyze_image(
         proj = db.get(Project, project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
+        if not user_can_access(db, project_id, user):
+            raise HTTPException(403, "You are not assigned to this project.")
         img_bytes = await file.read()
         try:
             info = save_image_bytes(project_id, file.filename or "image.jpg", img_bytes)
@@ -128,6 +133,8 @@ async def analyze_batch(
     proj = db.get(Project, project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
+    if not user_can_access(db, project_id, user):
+        raise HTTPException(403, "You are not assigned to this project.")
 
     ids = [int(x) for x in image_ids.split(",") if x.strip().isdigit()]
     images = db.scalars(select(SiteImage).where(SiteImage.id.in_(ids), SiteImage.project_id == project_id)).all()
@@ -166,6 +173,8 @@ def get_analysis(analysis_id: int, db: Annotated[Session, Depends(get_db)], user
     a = db.get(ProgressAnalysis, analysis_id)
     if not a:
         raise HTTPException(404, "Analysis not found")
+    if not user_can_access(db, a.project_id, user):
+        raise HTTPException(403, "You are not assigned to this project.")
     return a
 
 
@@ -177,6 +186,8 @@ def history(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
 ):
+    if not user_can_access(db, project_id, user):
+        raise HTTPException(403, "You are not assigned to this project.")
     return db.scalars(
         select(ProgressAnalysis)
         .where(ProgressAnalysis.project_id == project_id)
