@@ -354,20 +354,30 @@ function AIHistoryTab({ projectId }) {
 function ReportsTab({ projectId }) {
   const list = useQuery({ queryKey: ["reports", projectId], queryFn: () => reportsApi.list({ project_id: projectId }).then(r => r.data) });
   const [busyId, setBusyId] = useState(null);
+  const [busyAction, setBusyAction] = useState(null);
   const gen = useMutation({
     mutationFn: (payload) => reportsApi.generate(payload),
     onSuccess: () => { toast.success("Report generated"); list.refetch(); },
     onError: (e) => toast.error(e?.response?.data?.detail || "Failed"),
   });
 
-  const onDownload = async (report) => {
+  const handleAction = async (report, action) => {
     setBusyId(report.id);
+    setBusyAction(action);
     try {
-      await reportsApi.saveToDisk(report);
+      if (action === "view") await reportsApi.viewInBrowser(report);
+      else await reportsApi.saveToDisk(report);
     } catch (e) {
-      toast.error(e?.response?.status === 410 ? "Report file no longer exists on the server." : "Could not download report.");
+      toast.error(
+        e?.response?.status === 410
+          ? "Report file no longer exists on the server."
+          : action === "view"
+          ? "Could not open report."
+          : "Could not download report."
+      );
     } finally {
       setBusyId(null);
+      setBusyAction(null);
     }
   };
 
@@ -388,19 +398,31 @@ function ReportsTab({ projectId }) {
         <h3 className="font-semibold mb-2">Past reports</h3>
         <ul className="divide-y divide-slate-200">
           {(list.data || []).map((r) => (
-            <li key={r.id} className="py-2 flex items-center justify-between">
-              <div>
-                <div className="font-medium capitalize">{String(r.report_type).replace(/_/g, " ")}</div>
+            <li key={r.id} className="py-2 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="font-medium capitalize truncate">{String(r.report_type).replace(/_/g, " ")}</div>
                 <div className="text-xs text-slate-500">{new Date(r.generated_at).toLocaleString()}</div>
               </div>
-              <button
-                type="button"
-                disabled={busyId === r.id}
-                onClick={() => onDownload(r)}
-                className="text-ukwi-500 hover:underline text-sm disabled:opacity-50"
-              >
-                {busyId === r.id ? "Downloading…" : "Download"}
-              </button>
+              <div className="flex gap-1.5 flex-shrink-0">
+                <button
+                  type="button"
+                  disabled={busyId === r.id}
+                  onClick={() => handleAction(r, "view")}
+                  className="btn-primary !py-1 !px-2 !text-xs"
+                  title="Open in a new tab"
+                >
+                  {busyId === r.id && busyAction === "view" ? "…" : "👁️ View"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busyId === r.id}
+                  onClick={() => handleAction(r, "download")}
+                  className="btn-secondary !py-1 !px-2 !text-xs"
+                  title="Save to disk"
+                >
+                  {busyId === r.id && busyAction === "download" ? "…" : "⬇️"}
+                </button>
+              </div>
             </li>
           ))}
           {(!list.data || list.data.length === 0) && <li className="py-2 text-slate-500 text-sm">No reports yet.</li>}

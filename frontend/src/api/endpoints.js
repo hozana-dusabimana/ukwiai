@@ -111,29 +111,65 @@ export const reportsApi = {
   generate: (data) => api.post("/reports/generate", data),
   download: (id) => api.get(`/reports/${id}/download`, { responseType: "blob" }),
   /**
+   * Internal: pull a report file via the authenticated axios client and
+   * return { blob, filename, contentType } so callers can save it to disk
+   * or open it in a browser tab without re-implementing auth handling.
+   */
+  _fetchBlob: async (report) => {
+    const r = await api.get(`/reports/${report.id}/download`, { responseType: "blob" });
+    const blob = r.data instanceof Blob ? r.data : new Blob([r.data]);
+    const ct = r.headers?.["content-type"] || blob.type || "application/octet-stream";
+    const cd = r.headers?.["content-disposition"] || "";
+    const cdMatch = /filename="?([^"]+)"?/i.exec(cd);
+    const inferredExt = ct.includes("spreadsheet") ? "xlsx" : "pdf";
+    const filename =
+      cdMatch?.[1] || `ukwi-${report.report_type || "report"}-${report.id}.${inferredExt}`;
+    // Re-wrap so the browser inlines instead of downloading when we open
+    // the URL in a new tab (some servers send application/octet-stream).
+    const typed = blob.type === ct ? blob : new Blob([blob], { type: ct });
+    return { blob: typed, filename, contentType: ct };
+  },
+
+  /**
    * Download a report and trigger a "Save as" in the browser. Uses the
    * authenticated axios client so the JWT goes along — a plain <a href>
    * to /api/reports/{id}/download fails with 401 because the browser
    * doesn't include localStorage tokens automatically.
    */
   saveToDisk: async (report) => {
-    const r = await api.get(`/reports/${report.id}/download`, { responseType: "blob" });
-    const blob = r.data instanceof Blob ? r.data : new Blob([r.data]);
-    const cd = r.headers?.["content-disposition"] || "";
-    const cdMatch = /filename="?([^"]+)"?/i.exec(cd);
-    // Fallback name: derive from report_type + id when the server doesn't set
-    // a Content-Disposition filename.
-    const inferredExt = (r.headers?.["content-type"] || "").includes("spreadsheet") ? "xlsx" : "pdf";
-    const fname = cdMatch?.[1] || `ukwi-${report.report_type || "report"}-${report.id}.${inferredExt}`;
-
+    const { blob, filename } = await reportsApi._fetchBlob(report);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = fname;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+
+  /**
+   * Open a report in a new tab. PDFs render inline in modern browsers;
+   * Excel files will download (no built-in viewer). If a popup blocker
+   * intercepts window.open, we fall back to triggering a save instead so
+   * the user always gets *something*.
+   */
+  viewInBrowser: async (report) => {
+    const { blob, contentType } = await reportsApi._fetchBlob(report);
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, "_blank", "noopener,noreferrer");
+    if (!win) {
+      // Popup blocked — fall back to a save so the file isn't lost.
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ukwi-${report.report_type || "report"}-${report.id}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+    // Hold the URL alive long enough for the new tab to fetch it.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return { contentType };
   },
 };
 

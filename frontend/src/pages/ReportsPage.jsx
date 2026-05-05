@@ -155,6 +155,7 @@ export default function ReportsPage() {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [busyId, setBusyId] = useState(null);
+  const [busyAction, setBusyAction] = useState(null); // 'view' | 'download'
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 25;
 
@@ -201,20 +202,30 @@ export default function ReportsPage() {
     };
   }, [reports.data]);
 
-  const onDownload = async (report) => {
+  const handleAction = async (report, action) => {
     setBusyId(report.id);
+    setBusyAction(action);
     try {
-      await reportsApi.saveToDisk(report);
+      if (action === "view") {
+        await reportsApi.viewInBrowser(report);
+      } else {
+        await reportsApi.saveToDisk(report);
+      }
     } catch (e) {
       toast.error(
         e?.response?.status === 410
           ? "Report file no longer exists on the server."
+          : action === "view"
+          ? "Could not open report."
           : "Could not download report."
       );
     } finally {
       setBusyId(null);
+      setBusyAction(null);
     }
   };
+  const onDownload = (report) => handleAction(report, "download");
+  const onView = (report) => handleAction(report, "view");
 
   const onExportCsv = () => {
     if (filtered.length === 0) {
@@ -378,15 +389,27 @@ export default function ReportsPage() {
                         <td className="py-3 px-4 text-slate-600 text-xs">
                           {r.generated_by ? `User #${r.generated_by}` : "—"}
                         </td>
-                        <td className="py-3 px-4 text-right">
-                          <button
-                            type="button"
-                            disabled={busyId === r.id}
-                            onClick={() => onDownload(r)}
-                            className="btn-secondary !py-1.5 !px-3 !text-xs"
-                          >
-                            {busyId === r.id ? "…" : "⬇️ Download"}
-                          </button>
+                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                          <div className="inline-flex gap-1.5">
+                            <button
+                              type="button"
+                              disabled={busyId === r.id}
+                              onClick={() => onView(r)}
+                              className="btn-primary !py-1.5 !px-3 !text-xs"
+                              title="Open the report in a new tab"
+                            >
+                              {busyId === r.id && busyAction === "view" ? "…" : "👁️ View"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busyId === r.id}
+                              onClick={() => onDownload(r)}
+                              className="btn-secondary !py-1.5 !px-3 !text-xs"
+                              title="Save the report to your device"
+                            >
+                              {busyId === r.id && busyAction === "download" ? "…" : "⬇️"}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
