@@ -106,112 +106,60 @@ export const notificationsApi = {
   read: (id) => api.patch(`/notifications/${id}/read`),
 };
 
-// Internal: pull a report through fetch() (NOT axios) so we sidestep any
-// axios-Blob quirks under the dev proxy. We still re-use axios's
-// localStorage token + the same /api base URL, but we read the body as a
-// raw Blob with first-class browser primitives. Returns { blob, filename,
-// contentType }; errors carry a useful .message and .status.
-async function _fetchReportBlob(report) {
-  // The same baseURL axios uses — relative '/api' in dev so requests go
-  // through the Vite proxy.
+// Build a download URL with the JWT baked in as a query param. The backend
+// accepts ?token= as an alternative to the Authorization header so View /
+// Download can use plain browser navigation (window.open, <a href download>)
+// instead of fetch/XHR-with-blob — which can be killed by AV, extensions,
+// or finicky dev proxies and produces ERR_CONNECTION_RESET / Failed to fetch.
+function _reportUrl(reportId) {
   const base = import.meta.env.VITE_API_BASE_URL || "/api";
-  const token = localStorage.getItem("ukwi_access_token");
-  const url = `${base.replace(/\/$/, "")}/reports/${report.id}/download`;
-
-  let resp;
-  try {
-    resp = await fetch(url, {
-      method: "GET",
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      credentials: "omit",
-      cache: "no-store",
-    });
-  } catch (err) {
-    // fetch() rejects only on network errors. Surface the underlying
-    // browser message so we can tell CORS/connection-reset apart in toasts.
-    const e = new Error(`HTTP ?: ${err?.message || "Network error"}`);
-    e.isReportFetchError = true;
-    throw e;
-  }
-
-  if (!resp.ok) {
-    let detail = `HTTP ${resp.status}`;
-    try {
-      const text = await resp.text();
-      try {
-        const parsed = JSON.parse(text);
-        detail = parsed.detail || text || detail;
-      } catch {
-        if (text) detail = text;
-      }
-    } catch {
-      /* keep status-only detail */
-    }
-    const e = new Error(`HTTP ${resp.status}: ${detail}`);
-    e.status = resp.status;
-    e.isReportFetchError = true;
-    throw e;
-  }
-
-  const blob = await resp.blob();
-  if (!blob.size) throw new Error("Empty file received from server.");
-
-  const ct = resp.headers.get("content-type") || blob.type || "application/octet-stream";
-  const cd = resp.headers.get("content-disposition") || "";
-  const cdMatch = /filename="?([^"]+)"?/i.exec(cd);
-  const inferredExt = ct.includes("spreadsheet") ? "xlsx" : "pdf";
-  const filename =
-    cdMatch?.[1] || `ukwi-${report.report_type || "report"}-${report.id}.${inferredExt}`;
-
-  const typed = blob.type === ct ? blob : new Blob([blob], { type: ct });
-  return { blob: typed, filename, contentType: ct };
+  const token = localStorage.getItem("ukwi_access_token") || "";
+  const root = base.replace(/\/$/, "");
+  return `${root}/reports/${reportId}/download?token=${encodeURIComponent(token)}`;
 }
 
 
 export const reportsApi = {
   list: (params) => api.get("/reports", { params }),
   generate: (data) => api.post("/reports/generate", data),
+  // Kept for callers that want axios-style access; not used by saveToDisk/viewInBrowser.
   download: (id) => api.get(`/reports/${id}/download`, { responseType: "blob" }),
 
   /**
-   * Download a report and trigger a "Save as" in the browser. Uses the
-   * authenticated axios client so the JWT goes along — a plain <a href>
-   * to /api/reports/{id}/download fails with 401 because the browser
-   * doesn't include localStorage tokens automatically.
+   * Download a report by triggering a plain browser navigation with the
+   * JWT in the URL. Avoids every fetch/XHR/blob/window.open hazard.
    */
   saveToDisk: async (report) => {
-    const { blob, filename } = await _fetchReportBlob(report);
-    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
+    a.href = _reportUrl(report.id);
+    a.download = ""; // browser will use the server's Content-Disposition filename
+    a.rel = "noopener noreferrer";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
 
   /**
-   * Open a report in a new tab. PDFs render inline in modern browsers;
-   * Excel files will download (no built-in viewer). If a popup blocker
-   * intercepts window.open, we fall back to triggering a save instead so
-   * the user always gets *something*.
+   * Open a report in a new tab using a plain navigation. PDFs render
+   * inline; Excel falls back to the OS handler. If the browser blocks
+   * window.open we fall back to same-tab navigation so the user still
+   * gets the file.
    */
   viewInBrowser: async (report) => {
-    const { blob, contentType, filename } = await _fetchReportBlob(report);
-    const url = URL.createObjectURL(blob);
+    const url = _reportUrl(report.id);
     const win = window.open(url, "_blank", "noopener,noreferrer");
     if (!win) {
-      // Popup blocked — fall back to a save so the file isn't lost.
+      // Popup blocked — drop a hidden anchor click as a last resort.
       const a = document.createElement("a");
       a.href = url;
-      a.download = filename;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      return { popupBlocked: true };
     }
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    return { contentType, popupBlocked: !win };
+    return { popupBlocked: false };
   },
 };
 

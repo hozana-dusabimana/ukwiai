@@ -3,11 +3,14 @@ from pathlib import Path
 from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
+from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
+import jwt
 
 from app.core.database import get_db
 from app.core.deps import CurrentUser, require_manager_or_admin
+from app.core.security import decode_token
 from app.models.project import Project
 from app.models.report import Report
 from app.models.user import User
@@ -59,8 +62,48 @@ _MEDIA_TYPES = {
 }
 
 
+# Bearer scheme that does NOT raise on missing header so we can fall back
+# to the `?token=` query parameter. Used only for the download endpoint.
+_optional_bearer = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+
+
+def _user_for_download(
+    db: Annotated[Session, Depends(get_db)],
+    bearer_token: Annotated[str | None, Depends(_optional_bearer)] = None,
+    token: str | None = Query(default=None, description="JWT access token (alternative to Authorization header)"),
+) -> User:
+    """Auth resolver that accepts either a Bearer header (axios/fetch path)
+    or a ?token= query parameter (plain `<a href>` / `window.open` path —
+    crucial when AV/proxy/extensions kill XHR-with-Authorization flows)."""
+    raw = bearer_token or token
+    if not raw:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = decode_token(raw)
+        if payload.get("type") != "access":
+            raise HTTPException(status_code=401, detail="Wrong token type")
+        user_id = int(payload.get("sub"))
+    except (jwt.PyJWTError, ValueError, TypeError):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    u = db.get(User, user_id)
+    if u is None or not u.is_active:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+    return u
+
+
 @router.get("/reports/{report_id}/download")
-def download(report_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
+def download(
+    report_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(_user_for_download)],
+):
+    """Serve a generated report file.
+
+    Accepts auth via Bearer header *or* `?token=` query parameter so View /
+    Download buttons can use plain navigation (window.open / <a href>) when
+    the JS-with-Authorization-header path is blocked by AV, extensions, or
+    a finicky dev proxy.
+    """
     r = db.get(Report, report_id)
     if not r:
         raise HTTPException(404, "Report not found")
@@ -68,14 +111,13 @@ def download(report_id: int, db: Annotated[Session, Depends(get_db)], user: Curr
     if not p.exists():
         raise HTTPException(410, "Report file no longer exists")
 
-    # Read the whole file into memory and respond with a plain Response. This
-    # guarantees the entire body + headers are written in one atomic flush
-    # which dev proxies (Vite) sometimes mishandle when relaying streamed
-    # FileResponses and the browser sees ERR_CONNECTION_RESET.
+    # Read whole file into memory and respond atomically (no streaming —
+    # avoids Vite/http-proxy-middleware mishandling on some dev setups).
     data = p.read_bytes()
     media_type = _MEDIA_TYPES.get(p.suffix.lower(), "application/octet-stream")
-    # RFC 6266: ASCII filename + UTF-8 fallback for non-ASCII characters.
     safe_name = quote(p.name)
+    log_action(db, user.id, "report.download", "report", r.id)
+    db.commit()
     return Response(
         content=data,
         media_type=media_type,
