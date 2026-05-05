@@ -1,13 +1,15 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 
+// `roles` (when present) gates the sidebar entry — viewers don't see "AI
+// Analysis" or "Users" because they cannot use those pages.
 const navItems = [
   { to: "/", label: "Dashboard", icon: "📊" },
   { to: "/projects", label: "Projects", icon: "🏗️" },
-  { to: "/ai-analysis", label: "AI Analysis", icon: "🤖" },
+  { to: "/ai-analysis", label: "AI Analysis", icon: "🤖", roles: ["admin", "project_manager", "engineer"] },
   { to: "/alerts", label: "Alerts", icon: "🔔" },
   { to: "/reports", label: "Reports", icon: "📄" },
-  { to: "/users", label: "Users", icon: "👥", adminOnly: true },
+  { to: "/users", label: "Users", icon: "👥", roles: ["admin"] },
 ];
 
 export default function Layout() {
@@ -30,7 +32,7 @@ export default function Layout() {
         </div>
         <nav className="flex-1 p-3 space-y-1">
           {navItems
-            .filter((it) => !it.adminOnly || hasRole("admin"))
+            .filter((it) => !it.roles || hasRole(...it.roles))
             .map((it) => (
               <NavLink
                 key={it.to}

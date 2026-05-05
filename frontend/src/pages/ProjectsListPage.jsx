@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { projectsApi } from "../api/endpoints";
 import StatusBadge from "../components/StatusBadge";
+import RoleGate from "../components/RoleGate";
 
 export default function ProjectsListPage() {
   const [search, setSearch] = useState("");
@@ -15,7 +16,9 @@ export default function ProjectsListPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Projects</h1>
-        <Link to="/projects/new" className="btn-primary">+ New project</Link>
+        <RoleGate roles={["admin", "project_manager"]}>
+          <Link to="/projects/new" className="btn-primary">+ New project</Link>
+        </RoleGate>
       </div>
       <input className="input max-w-md" placeholder="Search by name or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
       <div className="card overflow-x-auto">

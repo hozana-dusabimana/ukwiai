@@ -6,7 +6,19 @@ import {
   projectsApi, budgetApi, costApi, aiApi, imagesApi, alertsApi, reportsApi,
 } from "../api/endpoints";
 import StatusBadge from "../components/StatusBadge";
+import RoleGate from "../components/RoleGate";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from "recharts";
+
+const ENGINEER_PLUS = ["admin", "project_manager", "engineer"];
+const MANAGER_PLUS = ["admin", "project_manager"];
+
+function ReadOnlyHint({ message = "Read-only — your role can browse but cannot make changes here." }) {
+  return (
+    <div className="card text-sm text-slate-500 border border-amber-200 bg-amber-50">
+      {message}
+    </div>
+  );
+}
 
 const tabs = ["Overview", "Stages", "Images", "Budget", "AI History", "Reports"];
 
@@ -147,12 +159,17 @@ function ImagesTab({ projectId }) {
 
   return (
     <div className="space-y-4">
-      <div className="card flex items-center gap-3">
-        <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files[0])} />
-        <button disabled={!file || upload.isPending} className="btn-primary" onClick={() => upload.mutate()}>
-          {upload.isPending ? "Uploading…" : "Upload image"}
-        </button>
-      </div>
+      <RoleGate
+        roles={ENGINEER_PLUS}
+        fallback={<ReadOnlyHint message="Read-only — only engineers, project managers, and admins can upload site images." />}
+      >
+        <div className="card flex items-center gap-3">
+          <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files[0])} />
+          <button disabled={!file || upload.isPending} className="btn-primary" onClick={() => upload.mutate()}>
+            {upload.isPending ? "Uploading…" : "Upload image"}
+          </button>
+        </div>
+      </RoleGate>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
         {(list.data || []).map((img) => (
           <div key={img.id} className="card p-2">
@@ -207,20 +224,25 @@ function BudgetTab({ projectId }) {
         </div>
       </div>
 
-      <form onSubmit={(e) => { e.preventDefault(); add.mutate(); }} className="card space-y-2">
-        <h3 className="font-semibold">Record expense</h3>
-        <div className="grid grid-cols-2 gap-2">
-          <div><label className="label">Category</label>
-            <select className="input" value={form.expense_category} onChange={set("expense_category")}>
-              {["materials", "labor", "equipment", "transport", "other"].map(c => <option key={c}>{c}</option>)}
-            </select>
+      <RoleGate
+        roles={ENGINEER_PLUS}
+        fallback={<ReadOnlyHint message="Read-only — only engineers, project managers, and admins can record expenses." />}
+      >
+        <form onSubmit={(e) => { e.preventDefault(); add.mutate(); }} className="card space-y-2">
+          <h3 className="font-semibold">Record expense</h3>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="label">Category</label>
+              <select className="input" value={form.expense_category} onChange={set("expense_category")}>
+                {["materials", "labor", "equipment", "transport", "other"].map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div><label className="label">Date</label><input type="date" className="input" value={form.expense_date} onChange={set("expense_date")} /></div>
+            <div><label className="label">Amount</label><input type="number" min="0.01" step="0.01" className="input" required value={form.amount} onChange={set("amount")} /></div>
           </div>
-          <div><label className="label">Date</label><input type="date" className="input" value={form.expense_date} onChange={set("expense_date")} /></div>
-          <div><label className="label">Amount</label><input type="number" min="0.01" step="0.01" className="input" required value={form.amount} onChange={set("amount")} /></div>
-        </div>
-        <div><label className="label">Description</label><textarea className="input" rows="2" value={form.description} onChange={set("description")} /></div>
-        <button disabled={add.isPending} className="btn-primary">{add.isPending ? "Saving…" : "Add expense"}</button>
-      </form>
+          <div><label className="label">Description</label><textarea className="input" rows="2" value={form.description} onChange={set("description")} /></div>
+          <button disabled={add.isPending} className="btn-primary">{add.isPending ? "Saving…" : "Add expense"}</button>
+        </form>
+      </RoleGate>
 
       <div className="card lg:col-span-2 overflow-x-auto">
         <h3 className="font-semibold mb-3">Expenses</h3>
@@ -291,12 +313,17 @@ function ReportsTab({ projectId }) {
 
   return (
     <div className="space-y-4">
-      <div className="card flex flex-wrap gap-2">
-        <button className="btn-primary" onClick={() => gen.mutate({ project_id: projectId, report_type: "full", format: "pdf" })}>Full PDF</button>
-        <button className="btn-secondary" onClick={() => gen.mutate({ project_id: projectId, report_type: "progress", format: "pdf" })}>Progress PDF</button>
-        <button className="btn-secondary" onClick={() => gen.mutate({ project_id: projectId, report_type: "budget", format: "pdf" })}>Budget PDF</button>
-        <button className="btn-secondary" onClick={() => gen.mutate({ project_id: projectId, report_type: "budget", format: "excel" })}>Budget Excel</button>
-      </div>
+      <RoleGate
+        roles={MANAGER_PLUS}
+        fallback={<ReadOnlyHint message="Read-only — only project managers and admins can generate new reports. You can still browse and download existing ones below." />}
+      >
+        <div className="card flex flex-wrap gap-2">
+          <button className="btn-primary" onClick={() => gen.mutate({ project_id: projectId, report_type: "full", format: "pdf" })}>Full PDF</button>
+          <button className="btn-secondary" onClick={() => gen.mutate({ project_id: projectId, report_type: "progress", format: "pdf" })}>Progress PDF</button>
+          <button className="btn-secondary" onClick={() => gen.mutate({ project_id: projectId, report_type: "budget", format: "pdf" })}>Budget PDF</button>
+          <button className="btn-secondary" onClick={() => gen.mutate({ project_id: projectId, report_type: "budget", format: "excel" })}>Budget Excel</button>
+        </div>
+      </RoleGate>
       <div className="card">
         <h3 className="font-semibold mb-2">Past reports</h3>
         <ul className="divide-y divide-slate-200">

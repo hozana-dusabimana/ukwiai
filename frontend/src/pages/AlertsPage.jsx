@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-toastify";
 import { alertsApi } from "../api/endpoints";
 import StatusBadge from "../components/StatusBadge";
+import RoleGate from "../components/RoleGate";
 
 export default function AlertsPage() {
   const qc = useQueryClient();
@@ -34,7 +35,9 @@ export default function AlertsPage() {
                 </div>
                 <div className="flex gap-2">
                   {!a.is_read && <button className="btn-secondary text-xs" onClick={() => read.mutate(a.id)}>Mark read</button>}
-                  {!a.resolved_at && <button className="btn-primary text-xs" onClick={() => resolve.mutate(a.id)}>Resolve</button>}
+                  <RoleGate roles={["admin", "project_manager"]}>
+                    {!a.resolved_at && <button className="btn-primary text-xs" onClick={() => resolve.mutate(a.id)}>Resolve</button>}
+                  </RoleGate>
                 </div>
               </li>
             ))}

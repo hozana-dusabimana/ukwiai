@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-toastify";
 import { aiApi, projectsApi } from "../api/endpoints";
 
 export default function AIAnalysisPage() {
+  const qc = useQueryClient();
   const projects = useQuery({ queryKey: ["projects-min"], queryFn: () => projectsApi.list().then(r => r.data) });
   const [projectId, setProjectId] = useState("");
   const [file, setFile] = useState(null);
@@ -25,6 +26,12 @@ export default function AIAnalysisPage() {
     },
     onSuccess: (r) => {
       setResult(r.data);
+      // Invalidate the project's analysis-history cache so the next time the
+      // user opens the project's AI History tab they see this run.
+      if (projectId) {
+        qc.invalidateQueries({ queryKey: ["ai-hist", String(projectId)] });
+        qc.invalidateQueries({ queryKey: ["ai-hist", Number(projectId)] });
+      }
       toast.success("Analysis complete");
     },
     onError: (e) => toast.error(e?.response?.data?.detail || "Analysis failed"),

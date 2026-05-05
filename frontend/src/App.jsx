@@ -24,9 +24,23 @@ export default function App() {
       <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<DashboardPage />} />
         <Route path="projects" element={<ProjectsListPage />} />
-        <Route path="projects/new" element={<ProjectCreatePage />} />
+        <Route
+          path="projects/new"
+          element={
+            <ProtectedRoute roles={["admin", "project_manager"]}>
+              <ProjectCreatePage />
+            </ProtectedRoute>
+          }
+        />
         <Route path="projects/:id" element={<ProjectDetailPage />} />
-        <Route path="ai-analysis" element={<AIAnalysisPage />} />
+        <Route
+          path="ai-analysis"
+          element={
+            <ProtectedRoute roles={["admin", "project_manager", "engineer"]}>
+              <AIAnalysisPage />
+            </ProtectedRoute>
+          }
+        />
         <Route path="alerts" element={<AlertsPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="profile" element={<ProfilePage />} />
