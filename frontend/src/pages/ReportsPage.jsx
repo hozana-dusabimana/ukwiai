@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { toast } from "react-toastify";
 import { reportsApi } from "../api/endpoints";
 
 const REPORT_ICONS = {
@@ -14,6 +16,18 @@ export default function ReportsPage() {
     queryKey: ["reports-all"],
     queryFn: () => reportsApi.list().then((r) => r.data),
   });
+  const [busyId, setBusyId] = useState(null);
+
+  const onDownload = async (report) => {
+    setBusyId(report.id);
+    try {
+      await reportsApi.saveToDisk(report);
+    } catch (e) {
+      toast.error(e?.response?.status === 410 ? "Report file no longer exists on the server." : "Could not download report.");
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -56,14 +70,14 @@ export default function ReportsPage() {
                     {new Date(r.generated_at).toLocaleString()}
                   </div>
                 </div>
-                <a
-                  href={`/api/reports/${r.id}/download`}
-                  target="_blank"
-                  rel="noreferrer"
+                <button
+                  type="button"
+                  disabled={busyId === r.id}
+                  onClick={() => onDownload(r)}
                   className="btn-secondary !py-1.5 !px-3 !text-xs"
                 >
-                  ⬇️ Download
-                </a>
+                  {busyId === r.id ? "Downloading…" : "⬇️ Download"}
+                </button>
               </li>
             ))}
           </ul>

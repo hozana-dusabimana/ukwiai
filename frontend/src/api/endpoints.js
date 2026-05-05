@@ -110,6 +110,31 @@ export const reportsApi = {
   list: (params) => api.get("/reports", { params }),
   generate: (data) => api.post("/reports/generate", data),
   download: (id) => api.get(`/reports/${id}/download`, { responseType: "blob" }),
+  /**
+   * Download a report and trigger a "Save as" in the browser. Uses the
+   * authenticated axios client so the JWT goes along — a plain <a href>
+   * to /api/reports/{id}/download fails with 401 because the browser
+   * doesn't include localStorage tokens automatically.
+   */
+  saveToDisk: async (report) => {
+    const r = await api.get(`/reports/${report.id}/download`, { responseType: "blob" });
+    const blob = r.data instanceof Blob ? r.data : new Blob([r.data]);
+    const cd = r.headers?.["content-disposition"] || "";
+    const cdMatch = /filename="?([^"]+)"?/i.exec(cd);
+    // Fallback name: derive from report_type + id when the server doesn't set
+    // a Content-Disposition filename.
+    const inferredExt = (r.headers?.["content-type"] || "").includes("spreadsheet") ? "xlsx" : "pdf";
+    const fname = cdMatch?.[1] || `ukwi-${report.report_type || "report"}-${report.id}.${inferredExt}`;
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
 };
 
 export const systemApi = {

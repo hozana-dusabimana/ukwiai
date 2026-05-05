@@ -353,11 +353,23 @@ function AIHistoryTab({ projectId }) {
 
 function ReportsTab({ projectId }) {
   const list = useQuery({ queryKey: ["reports", projectId], queryFn: () => reportsApi.list({ project_id: projectId }).then(r => r.data) });
+  const [busyId, setBusyId] = useState(null);
   const gen = useMutation({
     mutationFn: (payload) => reportsApi.generate(payload),
     onSuccess: () => { toast.success("Report generated"); list.refetch(); },
     onError: (e) => toast.error(e?.response?.data?.detail || "Failed"),
   });
+
+  const onDownload = async (report) => {
+    setBusyId(report.id);
+    try {
+      await reportsApi.saveToDisk(report);
+    } catch (e) {
+      toast.error(e?.response?.status === 410 ? "Report file no longer exists on the server." : "Could not download report.");
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -378,10 +390,17 @@ function ReportsTab({ projectId }) {
           {(list.data || []).map((r) => (
             <li key={r.id} className="py-2 flex items-center justify-between">
               <div>
-                <div className="font-medium">{r.report_type}</div>
+                <div className="font-medium capitalize">{String(r.report_type).replace(/_/g, " ")}</div>
                 <div className="text-xs text-slate-500">{new Date(r.generated_at).toLocaleString()}</div>
               </div>
-              <a href={`/api/reports/${r.id}/download`} target="_blank" rel="noreferrer" className="text-ukwi-500 hover:underline text-sm">Download</a>
+              <button
+                type="button"
+                disabled={busyId === r.id}
+                onClick={() => onDownload(r)}
+                className="text-ukwi-500 hover:underline text-sm disabled:opacity-50"
+              >
+                {busyId === r.id ? "Downloading…" : "Download"}
+              </button>
             </li>
           ))}
           {(!list.data || list.data.length === 0) && <li className="py-2 text-slate-500 text-sm">No reports yet.</li>}
