@@ -106,49 +106,63 @@ export const notificationsApi = {
   read: (id) => api.patch(`/notifications/${id}/read`),
 };
 
-// Internal: pull a report through the authenticated axios client and
-// return { blob, filename, contentType }. Blob errors and 401-with-blob
-// quirks (axios won't auto-parse the JSON error body when responseType is
-// 'blob') are normalised to a plain Error with a useful .message.
+// Internal: pull a report through fetch() (NOT axios) so we sidestep any
+// axios-Blob quirks under the dev proxy. We still re-use axios's
+// localStorage token + the same /api base URL, but we read the body as a
+// raw Blob with first-class browser primitives. Returns { blob, filename,
+// contentType }; errors carry a useful .message and .status.
 async function _fetchReportBlob(report) {
+  // The same baseURL axios uses — relative '/api' in dev so requests go
+  // through the Vite proxy.
+  const base = import.meta.env.VITE_API_BASE_URL || "/api";
+  const token = localStorage.getItem("ukwi_access_token");
+  const url = `${base.replace(/\/$/, "")}/reports/${report.id}/download`;
+
   let resp;
   try {
-    resp = await api.get(`/reports/${report.id}/download`, { responseType: "blob" });
+    resp = await fetch(url, {
+      method: "GET",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: "omit",
+      cache: "no-store",
+    });
   } catch (err) {
-    // If the server returned 401/410/etc with a JSON body, axios still
-    // gives us the response object — but the body is a Blob because of
-    // responseType. Read it as text so the toast shows the real reason.
-    const status = err?.response?.status;
-    let detail = err?.message || "Network error";
-    if (err?.response?.data instanceof Blob) {
-      try {
-        const text = await err.response.data.text();
-        const parsed = JSON.parse(text);
-        detail = parsed.detail || text;
-      } catch {
-        /* keep generic detail */
-      }
-    } else if (typeof err?.response?.data === "object") {
-      detail = err.response.data.detail || detail;
-    }
-    const e = new Error(`HTTP ${status || "?"}: ${detail}`);
-    e.status = status;
+    // fetch() rejects only on network errors. Surface the underlying
+    // browser message so we can tell CORS/connection-reset apart in toasts.
+    const e = new Error(`HTTP ?: ${err?.message || "Network error"}`);
     e.isReportFetchError = true;
     throw e;
   }
 
-  const blob = resp.data instanceof Blob ? resp.data : new Blob([resp.data]);
-  if (!blob.size) {
-    throw new Error("Empty file received from server.");
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try {
+      const text = await resp.text();
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed.detail || text || detail;
+      } catch {
+        if (text) detail = text;
+      }
+    } catch {
+      /* keep status-only detail */
+    }
+    const e = new Error(`HTTP ${resp.status}: ${detail}`);
+    e.status = resp.status;
+    e.isReportFetchError = true;
+    throw e;
   }
-  const ct = resp.headers?.["content-type"] || blob.type || "application/octet-stream";
-  const cd = resp.headers?.["content-disposition"] || "";
+
+  const blob = await resp.blob();
+  if (!blob.size) throw new Error("Empty file received from server.");
+
+  const ct = resp.headers.get("content-type") || blob.type || "application/octet-stream";
+  const cd = resp.headers.get("content-disposition") || "";
   const cdMatch = /filename="?([^"]+)"?/i.exec(cd);
   const inferredExt = ct.includes("spreadsheet") ? "xlsx" : "pdf";
   const filename =
     cdMatch?.[1] || `ukwi-${report.report_type || "report"}-${report.id}.${inferredExt}`;
-  // Re-wrap so the browser inlines instead of downloading when we open
-  // the URL in a new tab (some servers send application/octet-stream).
+
   const typed = blob.type === ct ? blob : new Blob([blob], { type: ct });
   return { blob: typed, filename, contentType: ct };
 }
