@@ -1,0 +1,60 @@
+from datetime import datetime, date
+from decimal import Decimal
+import enum
+from sqlalchemy import (
+    String, DateTime, Date, Numeric, Enum as SAEnum, Integer, Text, ForeignKey, func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base
+
+
+class ProjectStatus(str, enum.Enum):
+    planned = "planned"
+    ongoing = "ongoing"
+    completed = "completed"
+    on_hold = "on_hold"
+
+
+class CourtType(str, enum.Enum):
+    indoor = "indoor"
+    outdoor = "outdoor"
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    project_code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    client_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    court_type: Mapped[CourtType] = mapped_column(
+        SAEnum(CourtType, native_enum=False, length=20), default=CourtType.outdoor, nullable=False
+    )
+    court_dimensions: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    expected_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    actual_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    total_budget: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=Decimal("0"), nullable=False)
+    status: Mapped[ProjectStatus] = mapped_column(
+        SAEnum(ProjectStatus, native_enum=False, length=20),
+        default=ProjectStatus.planned,
+        nullable=False,
+        index=True,
+    )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    creator = relationship("User", back_populates="projects")
+    project_stages = relationship("ProjectStage", back_populates="project", cascade="all, delete-orphan")
+    images = relationship("SiteImage", back_populates="project", cascade="all, delete-orphan")
+    analyses = relationship("ProgressAnalysis", back_populates="project", cascade="all, delete-orphan")
+    expenses = relationship("BudgetRecord", back_populates="project", cascade="all, delete-orphan")
+    estimations = relationship("CostEstimation", back_populates="project", cascade="all, delete-orphan")
+    alerts = relationship("Alert", back_populates="project", cascade="all, delete-orphan")
+    reports = relationship("Report", back_populates="project", cascade="all, delete-orphan")

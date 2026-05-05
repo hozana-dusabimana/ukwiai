@@ -1,0 +1,182 @@
+from typing import Annotated
+from decimal import Decimal
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select, func, desc
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.core.deps import CurrentUser, require_engineer_plus, require_manager_or_admin
+from app.models.budget import BudgetRecord, ExpenseCategory
+from app.models.project import Project
+from app.models.stage import ConstructionStage, ProjectStage
+from app.models.user import User
+from app.schemas.budget import ExpenseCreate, ExpenseUpdate, ExpenseOut, BudgetSummary
+from app.services.audit import log_action
+from app.services.cost_estimation import total_recorded_expenses
+
+router = APIRouter(tags=["budget"])
+
+
+@router.get("/projects/{project_id}/budget")
+def project_budget(project_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
+    p = db.get(Project, project_id)
+    if not p:
+        raise HTTPException(404, "Project not found")
+    spent = total_recorded_expenses(db, project_id)
+    return {
+        "project_id": project_id,
+        "total_budget": float(p.total_budget or 0),
+        "total_spent": float(spent),
+        "remaining": float((p.total_budget or 0) - spent),
+        "spent_percent": float(spent) / float(p.total_budget) * 100 if p.total_budget else 0.0,
+    }
+
+
+@router.post(
+    "/projects/{project_id}/budget/expense",
+    response_model=ExpenseOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_expense(
+    project_id: int,
+    payload: ExpenseCreate,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_engineer_plus)],
+):
+    p = db.get(Project, project_id)
+    if not p:
+        raise HTTPException(404, "Project not found")
+
+    expense = BudgetRecord(
+        project_id=project_id,
+        stage_id=payload.stage_id,
+        expense_category=payload.expense_category,
+        amount=payload.amount,
+        description=payload.description,
+        expense_date=payload.expense_date,
+        recorded_by=user.id,
+        receipt_url=payload.receipt_url,
+    )
+    db.add(expense)
+    db.flush()
+
+    # Roll up actual_cost on the matching project_stage
+    if payload.stage_id:
+        ps = db.scalar(
+            select(ProjectStage).where(
+                ProjectStage.project_id == project_id, ProjectStage.stage_id == payload.stage_id
+            )
+        )
+        if ps:
+            ps.actual_cost = (ps.actual_cost or Decimal("0")) + payload.amount
+
+    log_action(db, user.id, "expense.create", "budget_record", expense.id, details={"amount": float(payload.amount)})
+    db.commit()
+    db.refresh(expense)
+    return expense
+
+
+@router.get("/projects/{project_id}/expenses", response_model=list[ExpenseOut])
+def list_expenses(
+    project_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    category: ExpenseCategory | None = None,
+):
+    stmt = select(BudgetRecord).where(BudgetRecord.project_id == project_id)
+    if category:
+        stmt = stmt.where(BudgetRecord.expense_category == category)
+    stmt = stmt.order_by(desc(BudgetRecord.expense_date), desc(BudgetRecord.id)).offset(skip).limit(limit)
+    return db.scalars(stmt).all()
+
+
+@router.put("/expenses/{expense_id}", response_model=ExpenseOut)
+def update_expense(
+    expense_id: int,
+    payload: ExpenseUpdate,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_manager_or_admin)],
+):
+    e = db.get(BudgetRecord, expense_id)
+    if not e:
+        raise HTTPException(404, "Expense not found")
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(e, k, v)
+    log_action(db, user.id, "expense.update", "budget_record", expense_id)
+    db.commit()
+    db.refresh(e)
+    return e
+
+
+@router.delete("/expenses/{expense_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_expense(
+    expense_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_manager_or_admin)],
+):
+    e = db.get(BudgetRecord, expense_id)
+    if not e:
+        raise HTTPException(404, "Expense not found")
+    db.delete(e)
+    log_action(db, user.id, "expense.delete", "budget_record", expense_id)
+    db.commit()
+
+
+@router.get("/projects/{project_id}/budget/summary", response_model=BudgetSummary)
+def budget_summary(project_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
+    p = db.get(Project, project_id)
+    if not p:
+        raise HTTPException(404, "Project not found")
+    spent = total_recorded_expenses(db, project_id)
+    by_cat_rows = db.execute(
+        select(BudgetRecord.expense_category, func.coalesce(func.sum(BudgetRecord.amount), 0))
+        .where(BudgetRecord.project_id == project_id)
+        .group_by(BudgetRecord.expense_category)
+    ).all()
+    by_cat = {c.value: Decimal(str(amt or 0)) for c, amt in by_cat_rows}
+
+    by_stage_rows = db.execute(
+        select(ConstructionStage.stage_name, func.coalesce(func.sum(BudgetRecord.amount), 0))
+        .select_from(BudgetRecord)
+        .join(ConstructionStage, BudgetRecord.stage_id == ConstructionStage.id, isouter=True)
+        .where(BudgetRecord.project_id == project_id)
+        .group_by(ConstructionStage.stage_name)
+    ).all()
+    by_stage = {(name or "unassigned"): Decimal(str(amt or 0)) for name, amt in by_stage_rows}
+
+    return BudgetSummary(
+        total_budget=Decimal(str(p.total_budget or 0)),
+        total_spent=spent,
+        remaining=Decimal(str(p.total_budget or 0)) - spent,
+        spent_percent=float(spent) / float(p.total_budget) * 100 if p.total_budget else 0.0,
+        by_category=by_cat,
+        by_stage=by_stage,
+    )
+
+
+@router.get("/projects/{project_id}/budget/breakdown")
+def breakdown(project_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
+    """Allocated vs actual cost per stage."""
+    rows = db.execute(
+        select(
+            ConstructionStage.stage_name,
+            ProjectStage.allocated_budget,
+            ProjectStage.actual_cost,
+            ProjectStage.status,
+        )
+        .join(ConstructionStage, ProjectStage.stage_id == ConstructionStage.id)
+        .where(ProjectStage.project_id == project_id)
+        .order_by(ConstructionStage.stage_order)
+    ).all()
+    return [
+        {
+            "stage_name": name,
+            "allocated_budget": float(allocated or 0),
+            "actual_cost": float(actual or 0),
+            "remaining": float((allocated or 0) - (actual or 0)),
+            "status": st.value if st else None,
+        }
+        for name, allocated, actual, st in rows
+    ]
