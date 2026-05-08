@@ -21,6 +21,132 @@ const CONFIDENCE_STYLES = {
   very_low: "bg-rose-100 text-rose-700 border-rose-200",
 };
 
+const DEVIATION_STYLES = {
+  on_track: { chip: "bg-emerald-100 text-emerald-700 border-emerald-200", label: "On track" },
+  over: { chip: "bg-rose-100 text-rose-700 border-rose-200", label: "Over budget" },
+  under: { chip: "bg-sky-100 text-sky-700 border-sky-200", label: "Under budget" },
+};
+
+const fmtMoney = (value) => {
+  const n = Number(value || 0);
+  // Localised RWF (or whatever currency the project uses) — using the user's
+  // browser locale gives commas/spaces that match what they expect in reports.
+  return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+};
+
+
+function CostBudgetCard({ estimation, totalBudget }) {
+  const budget = Number(totalBudget || 0);
+  const estimatedUsed = Number(estimation.estimated_cost_used || 0);
+  const actualRecorded = Number(estimation.actual_cost_recorded || 0);
+  const remaining = Number(estimation.predicted_remaining_budget || 0);
+  const variance = Number(estimation.variance || 0);
+  const projectedTotal = Number(estimation.projected_total_cost || 0);
+  const status = estimation.deviation_status || "on_track";
+  const dev = DEVIATION_STYLES[status] || DEVIATION_STYLES.on_track;
+
+  // Remaining as a fraction of the original budget — used for the bar.
+  const remainingPct = budget > 0 ? Math.max(0, Math.min(100, (remaining / budget) * 100)) : 0;
+  const usedPct = budget > 0 ? Math.max(0, Math.min(100, (actualRecorded / budget) * 100)) : 0;
+  const variancePct = budget > 0 ? (variance / budget) * 100 : 0;
+
+  if (budget <= 0) {
+    return (
+      <div className="card border-l-4 border-l-slate-300">
+        <div className="text-xs uppercase tracking-wide text-slate-500">Cost vs. budget</div>
+        <p className="text-sm text-slate-600 mt-2">
+          This project has no total budget set, so the cost forecast is unavailable.
+          Set <span className="font-medium">total_budget</span> on the project to enable it.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card border-l-4 border-l-ukwi-500">
+      <div className="flex items-center justify-between">
+        <div className="text-xs uppercase tracking-wide text-slate-500">Cost vs. budget</div>
+        <span className={`badge border ${dev.chip}`}>{dev.label}</span>
+      </div>
+
+      {/* Stacked progress bar: used (blue) | remaining (light) */}
+      <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden flex">
+        <div
+          className="h-full bg-gradient-to-r from-ukwi-500 to-ukwi-300 transition-all"
+          style={{ width: `${usedPct}%` }}
+          title={`Spent ${usedPct.toFixed(1)}% of budget`}
+        />
+      </div>
+      <div className="mt-1 text-[10px] text-slate-500 flex justify-between">
+        <span>Spent {usedPct.toFixed(1)}%</span>
+        <span>Remaining {remainingPct.toFixed(1)}%</span>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">Total budget</div>
+          <div className="font-semibold text-slate-800">{fmtMoney(budget)}</div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">
+            Expected cost spent
+            <span
+              className="ml-1 text-slate-400"
+              title="Total budget × AI-predicted progress %"
+            >
+              ⓘ
+            </span>
+          </div>
+          <div className="font-semibold text-slate-800">{fmtMoney(estimatedUsed)}</div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">Actual cost recorded</div>
+          <div className="font-semibold text-slate-800">{fmtMoney(actualRecorded)}</div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">Predicted remaining</div>
+          <div className="font-semibold text-slate-800">{fmtMoney(remaining)}</div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">
+            Variance
+            <span
+              className="ml-1 text-slate-400"
+              title="Actual − Expected. Positive = ahead in spending; negative = behind."
+            >
+              ⓘ
+            </span>
+          </div>
+          <div
+            className={`font-semibold ${
+              status === "over" ? "text-rose-700" : status === "under" ? "text-sky-700" : "text-emerald-700"
+            }`}
+          >
+            {variance >= 0 ? "+" : ""}
+            {fmtMoney(variance)}
+            <span className="text-xs text-slate-500 ml-1">
+              ({variancePct >= 0 ? "+" : ""}
+              {variancePct.toFixed(1)}%)
+            </span>
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">
+            Projected final cost
+            <span
+              className="ml-1 text-slate-400"
+              title="If spending continues at the current rate, the project will land here at 100% completion."
+            >
+              ⓘ
+            </span>
+          </div>
+          <div className="font-semibold text-slate-800">{fmtMoney(projectedTotal)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 function AnalysisResult({ result, onAnalyseAnother }) {
   const a = result?.analysis;
@@ -74,6 +200,13 @@ function AnalysisResult({ result, onAnalyseAnother }) {
           </div>
         </div>
       </div>
+
+      {result.cost_estimation && (
+        <CostBudgetCard
+          estimation={result.cost_estimation}
+          totalBudget={result.project_total_budget}
+        />
+      )}
 
       {result.summary && (
         <div className="card border-l-4 border-l-ukwi-500">

@@ -14,6 +14,7 @@ from app.models.project import Project
 from app.models.analysis import ProgressAnalysis
 from app.models.user import User
 from app.schemas.analysis import ProgressAnalysisOut, AnalyzeResponse
+from app.schemas.cost import CostEstimationOut
 from app.services.ai_client import ai_client, AIServiceError
 from app.services.cost_estimation import compute_cost_estimation
 from app.services.alerts import evaluate_cost_alerts
@@ -116,6 +117,8 @@ async def analyze_image(
     return AnalyzeResponse(
         analysis=analysis,
         cost_estimation_id=estimation.id,
+        cost_estimation=CostEstimationOut.model_validate(estimation),
+        project_total_budget=proj.total_budget,
         summary=ai_resp.get("summary"),
         advice=ai_resp.get("advice"),
         next_stage=ai_resp.get("next_stage"),

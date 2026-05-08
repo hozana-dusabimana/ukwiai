@@ -2,6 +2,8 @@ from datetime import datetime
 from decimal import Decimal
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.cost import CostEstimationOut
+
 
 class ProgressAnalysisOut(BaseModel):
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
@@ -20,6 +22,11 @@ class ProgressAnalysisOut(BaseModel):
 class AnalyzeResponse(BaseModel):
     analysis: ProgressAnalysisOut
     cost_estimation_id: int | None = None
+    # Full cost-vs-budget snapshot computed from this prediction. Lets the
+    # frontend show "expected cost spent / actual / remaining" alongside the
+    # stage prediction without a second round-trip.
+    cost_estimation: CostEstimationOut | None = None
+    project_total_budget: Decimal | None = None
     summary: str | None = None
     advice: str | None = None
     next_stage: str | None = None
