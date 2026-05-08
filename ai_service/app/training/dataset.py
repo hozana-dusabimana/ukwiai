@@ -34,6 +34,12 @@ def _extract_progress(stem: str, default: float) -> float:
 
 
 def _load_split(split_dir: Path, input_size: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load (images, class_indices, progress_in_[0,1]).
+
+    Progress labels are normalised to [0, 1] to match the model's sigmoid head —
+    the previous version kept them in [0, 100] and used a Lambda*100 wrapper on
+    the output, which interacted badly with Keras 3 dict-output routing.
+    """
     images, classes, progresses = [], [], []
     for cls_idx in range(NUM_CLASSES):
         cls_dir = split_dir / f"stage_{cls_idx + 1}"
@@ -49,7 +55,7 @@ def _load_split(split_dir: Path, input_size: int) -> tuple[np.ndarray, np.ndarra
             img = tf.cast(img, tf.float32) / 255.0
             images.append(img.numpy())
             classes.append(cls_idx)
-            progresses.append(_extract_progress(img_path.stem, midpoint))
+            progresses.append(_extract_progress(img_path.stem, midpoint) / 100.0)
     if not images:
         raise FileNotFoundError(f"No images found under {split_dir}")
     return (

@@ -27,6 +27,59 @@ RNG = np.random.default_rng(42)
 W, H = 320, 320     # render at 320, the trainer resizes to 224
 
 
+# ---------------------------------------------------------------- texture utils
+def _multi_octave_noise(shape, octaves=4, persistence=0.55, sigma_scale=20.0):
+    """Approximate Perlin/multi-octave noise via summed gaussian blurs at
+    progressively higher frequencies. Produces organic-looking textures (cracks,
+    soil clumps, asphalt grain) much more realistic than flat gaussian noise."""
+    H_, W_ = shape[:2]
+    out = np.zeros((H_, W_), dtype=np.float32)
+    amp = 1.0
+    for o in range(octaves):
+        sigma = max(0.5, sigma_scale / (2 ** o))
+        seed = RNG.normal(0, 1, (H_, W_)).astype(np.float32)
+        smoothed = cv2.GaussianBlur(seed, (0, 0), sigma)
+        # Re-normalise after blur so amplitudes are comparable across octaves.
+        s = smoothed.std() or 1.0
+        out += (smoothed / s) * amp
+        amp *= persistence
+    out -= out.mean()
+    out /= max(out.std(), 1e-6)
+    return out  # zero-mean, unit-std, range typically [-3, 3]
+
+
+def _texture_modulate(base_color_bgr, shape, intensity=18.0, sigma_scale=14.0):
+    """Return an HxWx3 texture by modulating a BGR base colour with noise."""
+    n = _multi_octave_noise(shape, octaves=4, persistence=0.55, sigma_scale=sigma_scale)
+    base = np.full((shape[0], shape[1], 3),
+                   np.array(base_color_bgr, dtype=np.float32))
+    return base + np.repeat((n * intensity)[..., None], 3, axis=-1)
+
+
+def _add_color_temperature(img, kelvin_shift=None):
+    """Random warm/cool tint to simulate sunlight at different times of day."""
+    if kelvin_shift is None:
+        kelvin_shift = float(RNG.uniform(-1.0, 1.0))
+    # Positive => warmer (more red, less blue); negative => cooler.
+    img[..., 0] *= (1.0 - 0.06 * kelvin_shift)  # B
+    img[..., 2] *= (1.0 + 0.06 * kelvin_shift)  # R
+    return img
+
+
+def _motion_blur(img, kernel_size=None):
+    if kernel_size is None:
+        kernel_size = int(RNG.integers(3, 8))
+    if kernel_size < 3:
+        return img
+    angle = float(RNG.uniform(-30, 30))
+    k = np.zeros((kernel_size, kernel_size), dtype=np.float32)
+    k[kernel_size // 2, :] = 1.0
+    M = cv2.getRotationMatrix2D((kernel_size / 2, kernel_size / 2), angle, 1.0)
+    k = cv2.warpAffine(k, M, (kernel_size, kernel_size))
+    k /= max(k.sum(), 1e-6)
+    return cv2.filter2D(img, -1, k)
+
+
 # OpenCV in Python rejects numpy scalars for color/coordinate args ("Scalar value …
 # is not numeric"). These helpers cast everything to native ints.
 def _i(x) -> int:
@@ -141,89 +194,154 @@ def _finalize(img):
 
 # ---------------------------------------------------------------- per-stage renderers
 def render_stage1():
-    """Site clearing: bare earth, machinery silhouettes, soil heaps."""
-    # Soil = warm brown: high R, mid G, low B.
-    base = _grad_v((140, 100, 70), (175, 130, 90))
-    base += _noise(base.shape, 25)
+    """Site clearing: bare earth, multi-octave soil texture, machinery, heaps."""
+    # Multi-octave brown soil with realistic clumping.
+    soil_bgr = (_ri(60, 90), _ri(85, 120), _ri(125, 160))   # B, G, R for warm soil
+    base = _texture_modulate(soil_bgr, (H, W), intensity=22.0, sigma_scale=18.0)
+    # Add darker tracked-mud strips (vehicle treads).
+    for _ in range(_ri(0, 3)):
+        y = _ri(H // 3, H - 20)
+        thickness = _ri(8, 22)
+        for dx in range(thickness):
+            cv2.line(base, _pt(0, y + dx - thickness // 2),
+                     _pt(W, y + dx - thickness // 2 + _ri(-6, 6)),
+                     _bgr(_ri(35, 70), _ri(55, 80), _ri(80, 110)), 1)
+    # Soil heaps with gradient shading (3D illusion).
     for _ in range(_ri(2, 6)):
-        cx, cy = _ri(0, W), _ri(H * 3 // 4, H)
-        rx, ry = _ri(20, 70), _ri(10, 30)
-        # Heap: dark brown (R, G, B)
-        color = _bgr(_ri(95, 140), _ri(65, 95), _ri(45, 75))
-        cv2.ellipse(base, _pt(cx, cy), _pt(rx, ry), _ri(0, 180), 0, 360, color, -1)
-    for _ in range(_ri(0, 4)):
-        y = _ri(H // 2, H - 20)
-        cv2.line(base, _pt(0, y), _pt(W, y + _ri(-10, 10)),
-                 _bgr(_ri(80, 130), _ri(55, 90), _ri(35, 70)), 3)
-    if RNG.random() < 0.3:
-        x = _ri(50, W - 80)
+        cx, cy = _ri(20, W - 20), _ri(H * 3 // 5, H - 5)
+        rx, ry = _ri(25, 80), _ri(15, 35)
+        for r_step in range(rx, 0, -2):
+            shade = 0.6 + 0.4 * (1 - r_step / rx)
+            color = _bgr(int(95 * shade), int(70 * shade), int(50 * shade))
+            cv2.ellipse(base, _pt(cx, cy), _pt(r_step, max(1, int(ry * r_step / rx))),
+                        _ri(0, 180), 0, 360, color, -1)
+    # Machinery silhouette (excavator/truck).
+    if RNG.random() < 0.5:
+        x = _ri(40, W - 100)
         y = _ri(H // 3, H * 2 // 3)
-        cv2.rectangle(base, _pt(x, y), _pt(x + 60, y + 40), _bgr(40, 40, 50), -1)
-        cv2.rectangle(base, _pt(x + 10, y - 20), _pt(x + 50, y), _bgr(50, 50, 60), -1)
+        # Body
+        cv2.rectangle(base, _pt(x, y), _pt(x + 70, y + 40),
+                      _bgr(_ri(160, 220), _ri(120, 180), _ri(40, 80)), -1)
+        # Cabin
+        cv2.rectangle(base, _pt(x + 10, y - 25), _pt(x + 50, y),
+                      _bgr(_ri(170, 230), _ri(130, 180), _ri(40, 90)), -1)
+        # Boom arm
+        cv2.line(base, _pt(x + 60, y + 10), _pt(x + 110, y - 30),
+                 _bgr(_ri(170, 220), _ri(120, 170), _ri(40, 80)), 4)
+        # Tracks (dark)
+        cv2.rectangle(base, _pt(x - 5, y + 35), _pt(x + 75, y + 50), _bgr(20, 20, 25), -1)
     base = _add_sky(base)
+    base = _add_color_temperature(base)
     base = _light_jitter(base)
     base = _cast_shadow(base)
+    if RNG.random() < 0.2:
+        base = _motion_blur(base, kernel_size=3)
     return _finalize(_persp(base))
 
 
 def render_stage2():
-    """Sub-base: levelled gravel rectangle, lighter than soil, faint texture."""
-    base = _grad_v((125, 120, 110), (145, 138, 125))
-    base += _noise(base.shape, 30)
+    """Sub-base: compacted gravel pad — coarse gritty texture distinct from soil
+    (cooler/greyer), surrounded by leftover dirt at the edges."""
+    # Soil-y surround.
+    base = _texture_modulate((75, 95, 130), (H, W), intensity=20.0, sigma_scale=18.0)
+    # Levelled gravel pad in centre — cooler grey, finer multi-octave grain.
     pad_x = _ri(20, 50)
-    pad_y = _ri(40, 80)
-    cv2.rectangle(base, _pt(pad_x, pad_y), _pt(W - pad_x, H - pad_y // 2),
-                  _bgr(140, 135, 125), -1)
-    inner = base[pad_y:H - pad_y // 2, pad_x:W - pad_x]
-    inner += _noise(inner.shape, 18)
+    pad_y_top = _ri(40, 80)
+    pad_y_bot = H - _ri(15, 40)
+    pad_h = pad_y_bot - pad_y_top
+    pad_w = (W - 2 * pad_x)
+    gravel = _texture_modulate((110, 115, 120), (pad_h, pad_w),
+                               intensity=14.0, sigma_scale=6.0)
+    # Add bright stone speckles characteristic of crushed aggregate.
+    speckle = (RNG.random((pad_h, pad_w)) > 0.97).astype(np.float32)
+    speckle_color = np.full((pad_h, pad_w, 3), [200, 200, 200], dtype=np.float32)
+    gravel = np.where(speckle[..., None] > 0, speckle_color, gravel)
+    base[pad_y_top:pad_y_bot, pad_x:pad_x + pad_w] = gravel
+    # Survey stakes around the pad perimeter.
     for x in (pad_x, W - pad_x):
-        cv2.line(base, _pt(x, pad_y), _pt(x, H - pad_y // 2), _bgr(70, 55, 40), 2)
+        cv2.line(base, _pt(x, pad_y_top), _pt(x, pad_y_bot), _bgr(70, 55, 40), 2)
+    # Compactor track marks across the gravel.
+    for _ in range(_ri(1, 3)):
+        y = _ri(pad_y_top + 10, pad_y_bot - 10)
+        cv2.line(base, _pt(pad_x + 5, y), _pt(pad_x + pad_w - 5, y),
+                 _bgr(95, 100, 105), 1)
     base = _add_sky(base)
     base = _add_grass_border(base)
+    base = _add_color_temperature(base)
     base = _light_jitter(base)
     return _finalize(_persp(base))
 
 
 def render_stage3():
-    """Concrete slab: bright grey, formwork, occasional rebar."""
-    base = _grad_v((175, 175, 178), (195, 195, 198))
-    base += _noise(base.shape, 6)
+    """Concrete slab freshly poured: bright grey with very fine surface grain,
+    visible formwork around the perimeter, occasional rebar offcuts on top."""
+    # Optional dirt surround.
+    base = _texture_modulate((80, 100, 130), (H, W), intensity=15.0, sigma_scale=18.0)
+    # Slab with very fine smooth texture (concrete is mostly uniform).
     pad = _ri(15, 35)
-    cv2.rectangle(base, _pt(pad, pad + 20), _pt(W - pad, H - pad), _bgr(90, 75, 50), 4)
-    for _ in range(_ri(0, 5)):
-        x0, y0 = _ri(0, W), _ri(0, H)
-        x1, y1 = x0 + _ri(-30, 30), y0 + _ri(-30, 30)
-        cv2.line(base, _pt(x0, y0), _pt(x1, y1), _bgr(160, 160, 160), 1)
-    if RNG.random() < 0.45:
-        bx = _ri(20, W - 60)
-        by = _ri(H // 2, H - 80)
-        for i in range(_ri(3, 7)):
-            cv2.line(base, _pt(bx + i * 5, by), _pt(bx + i * 5, by + 60),
-                     _bgr(130, 130, 130), 1)
+    slab_y0 = pad + _ri(15, 35)
+    slab = _texture_modulate((178, 180, 178), (H - slab_y0 - pad, W - 2 * pad),
+                             intensity=4.0, sigma_scale=3.0)
+    # Subtle longer-wavelength stains/discolouration.
+    stains = _multi_octave_noise((H - slab_y0 - pad, W - 2 * pad),
+                                  octaves=3, persistence=0.6, sigma_scale=40.0)
+    slab += np.repeat((stains * 6.0)[..., None], 3, axis=-1)
+    base[slab_y0:H - pad, pad:W - pad] = slab
+    # Wooden formwork (warm brown rectangle outline).
+    cv2.rectangle(base, _pt(pad, slab_y0), _pt(W - pad, H - pad),
+                  _bgr(_ri(70, 110), _ri(55, 85), _ri(40, 65)), 4)
+    # Rebar grid fragment occasionally visible.
+    if RNG.random() < 0.5:
+        bx = _ri(pad + 5, W - pad - 80)
+        by = _ri(slab_y0 + 10, H - pad - 70)
+        for i in range(_ri(4, 9)):
+            cv2.line(base, _pt(bx + i * 6, by), _pt(bx + i * 6, by + 55),
+                     _bgr(_ri(110, 145), _ri(110, 145), _ri(110, 145)), 1)
+        for j in range(_ri(2, 4)):
+            cv2.line(base, _pt(bx, by + j * 15), _pt(bx + 50, by + j * 15),
+                     _bgr(125, 125, 125), 1)
+    # Wet-look glossy patches on cured concrete.
+    if RNG.random() < 0.3:
+        gx, gy = _ri(pad + 30, W - pad - 60), _ri(slab_y0 + 20, H - pad - 50)
+        cv2.ellipse(base, _pt(gx, gy), _pt(_ri(20, 50), _ri(8, 18)),
+                    _ri(0, 180), 0, 360, _bgr(195, 197, 198), -1)
     base = _add_sky(base, sky_h_frac=float(RNG.uniform(0.0, 0.18)))
+    base = _add_color_temperature(base)
     base = _light_jitter(base)
     base = _cast_shadow(base)
     return _finalize(_persp(base))
 
 
 def render_stage4():
-    """Asphalt/acrylic surface: dark, smooth, uniform."""
-    color_choice = str(RNG.choice(["asphalt", "green", "blue"]))
-    # All tuples expressed as RGB; _grad_v converts to BGR for cv2.
+    """Surface finishing: asphalt or coloured acrylic, with realistic grain."""
+    color_choice = str(RNG.choice(["asphalt", "green", "blue", "red"]))
     if color_choice == "asphalt":
-        top, bot = (45, 45, 48), (60, 60, 65)
+        center_bgr = (_ri(40, 55), _ri(40, 55), _ri(40, 55))
+        intensity = 4.0          # asphalt has visible aggregate grain
+        sigma = 2.0
     elif color_choice == "green":
-        # Acrylic court green
-        top, bot = (50, 110, 55), (70, 130, 75)
-    else:
-        # Acrylic court blue
-        top, bot = (40, 80, 140), (55, 95, 155)
-    base = _grad_v(top, bot)
-    base += _noise(base.shape, 3)
+        center_bgr = (_ri(55, 80), _ri(115, 145), _ri(55, 85))
+        intensity = 3.0
+        sigma = 4.0
+    elif color_choice == "blue":
+        center_bgr = (_ri(135, 165), _ri(80, 105), _ri(40, 65))
+        intensity = 3.0
+        sigma = 4.0
+    else:  # red acrylic
+        center_bgr = (_ri(50, 75), _ri(55, 80), _ri(140, 175))
+        intensity = 3.0
+        sigma = 4.0
+    base = _texture_modulate(center_bgr, (H, W), intensity=intensity, sigma_scale=sigma)
+    # Very subtle long-wavelength tint variation.
+    tint = _multi_octave_noise((H, W), octaves=2, persistence=0.5, sigma_scale=60.0)
+    base += np.repeat((tint * 3.0)[..., None], 3, axis=-1)
     base = _add_sky(base, sky_h_frac=float(RNG.uniform(0.0, 0.15)))
     base = _add_grass_border(base, frac=float(RNG.uniform(0.0, 0.12)))
+    base = _add_color_temperature(base)
     base = _light_jitter(base)
     base = _cast_shadow(base)
+    if RNG.random() < 0.15:
+        base = _motion_blur(base, kernel_size=3)
     return _finalize(_persp(base))
 
 
