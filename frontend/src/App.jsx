@@ -11,6 +11,7 @@ import ProjectCreatePage from "./pages/ProjectCreatePage";
 import ProjectDetailPage from "./pages/ProjectDetailPage";
 import AIAnalysisPage from "./pages/AIAnalysisPage";
 import AlertsPage from "./pages/AlertsPage";
+import NotificationsPage from "./pages/NotificationsPage";
 import ReportsPage from "./pages/ReportsPage";
 import UsersPage from "./pages/UsersPage";
 import ProfilePage from "./pages/ProfilePage";
@@ -47,6 +48,7 @@ export default function App() {
           }
         />
         <Route path="alerts" element={<AlertsPage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="users" element={<ProtectedRoute roles={["admin"]}><UsersPage /></ProtectedRoute>} />
