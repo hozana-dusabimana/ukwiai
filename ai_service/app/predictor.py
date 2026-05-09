@@ -142,6 +142,15 @@ class Predictor:
     def _load_model_if_needed(self) -> None:
         if self._model is not None or not os.path.exists(self.model_path):
             return
+        # Operator escape hatch: when the trained CNN is overconfident on
+        # out-of-distribution real photos (e.g. only synthetic training data),
+        # AI_FORCE_HEURISTIC=1 keeps the predictor on the deterministic CV
+        # heuristic without having to delete the .h5 file.
+        if os.environ.get("AI_FORCE_HEURISTIC", "").strip().lower() in ("1", "true", "yes"):
+            logger.info("AI_FORCE_HEURISTIC is set — skipping trained model, using heuristic fallback.")
+            self._model = None
+            self._using_fallback = True
+            return
         if not self._model_passes_sanity_check():
             self._model = None
             self._using_fallback = True

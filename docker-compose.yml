@@ -29,6 +29,7 @@ services:
       AI_MODEL_PATH: ${AI_MODEL_PATH:-/app/models/basketball_court_cnn.h5}
       AI_MODEL_VERSION: ${AI_MODEL_VERSION:-1.0.0}
       AI_INPUT_SIZE: ${AI_INPUT_SIZE:-224}
+      AI_FORCE_HEURISTIC: ${AI_FORCE_HEURISTIC:-0}
     ports:
       - "8001:8001"
     volumes:
