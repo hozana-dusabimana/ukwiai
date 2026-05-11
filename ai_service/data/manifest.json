@@ -1,0 +1,45 @@
+{
+  "stages": [
+    "Site Clearing & Excavation",
+    "Sub-base Preparation",
+    "Base Layer / Concrete Slab",
+    "Surface Finishing (Asphalt/Acrylic)",
+    "Court Line Marking & Painting",
+    "Hoops & Backboards Installation",
+    "Fencing & Final Touches"
+  ],
+  "sources": {
+    "synthetic": {
+      "synthetic": 3710
+    }
+  },
+  "final_counts": {
+    "train": {
+      "stage_1": 400,
+      "stage_2": 400,
+      "stage_3": 400,
+      "stage_4": 400,
+      "stage_5": 400,
+      "stage_6": 400,
+      "stage_7": 400
+    },
+    "val": {
+      "stage_1": 80,
+      "stage_2": 80,
+      "stage_3": 80,
+      "stage_4": 80,
+      "stage_5": 80,
+      "stage_6": 80,
+      "stage_7": 80
+    },
+    "test": {
+      "stage_1": 50,
+      "stage_2": 50,
+      "stage_3": 50,
+      "stage_4": 50,
+      "stage_5": 50,
+      "stage_6": 50,
+      "stage_7": 50
+    }
+  }
+}

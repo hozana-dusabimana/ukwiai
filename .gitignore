@@ -41,9 +41,9 @@ coverage/
 # AI artifacts (large files — prefer DVC or LFS in real life)
 ai_service/models/*.h5
 ai_service/models/*.keras
-ai_service/data/
 # But DO commit the canonical production model + its training metadata so
 # fresh clones get a working AI service without needing to retrain.
+# Training dataset is also committed so receivers can retrain if desired.
 !ai_service/models/basketball_court_cnn.h5
 !ai_service/models/basketball_court_cnn.meta.json
 
