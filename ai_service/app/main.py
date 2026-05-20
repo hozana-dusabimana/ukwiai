@@ -4,6 +4,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 
 from .predictor import get_predictor
 from .stages import STAGES
+from .object_detection import _load_pipeline as _preload_owlv2
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("ai-service")
@@ -13,6 +14,17 @@ app = FastAPI(
     description="Computer-vision microservice for basketball-court progress estimation.",
     version="1.0.0",
 )
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    """Warm-load OWLv2 in the background so first /predict doesn't pay the
+    600 MB model-download tax synchronously. If the load fails (no GPU, no
+    cache, no torch), the predictor silently falls back to heuristics-only."""
+    try:
+        _preload_owlv2()
+    except Exception as exc:
+        logger.warning("OWLv2 preload skipped: %s", exc)
 
 
 @app.get("/health")

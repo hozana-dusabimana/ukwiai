@@ -1,0 +1,137 @@
+"""Zero-shot object detection for basketball-court stage classification.
+
+Uses OWLv2 (Google) to find backboards, chain-link fencing, and basketball
+poles in site photos. The detector is *zero-shot* — it takes natural-language
+prompts and finds matching objects without any task-specific training. This
+is what lets the heuristic finally reach Stages 6 and 7 reliably: pixel-only
+rules can't tell a backboard from a worker's shirt, but OWLv2 can.
+
+The model is lazy-loaded on first use (the import alone costs ~1 s, and the
+weights download is ~600 MB on first call). If torch / transformers aren't
+installed, `detect_court_structures` returns an empty result and the heuristic
+falls back to its prior behaviour — the service stays functional without ML.
+"""
+from __future__ import annotations
+import logging
+import os
+import threading
+from dataclasses import dataclass
+from typing import Any
+
+logger = logging.getLogger("ai-objdet")
+_LOCK = threading.Lock()
+_PIPELINE: Any | None = None
+_PIPELINE_LOAD_ATTEMPTED = False
+
+# Text prompts. Wording matters for zero-shot — short concrete nouns work best.
+_PROMPTS = [
+    "basketball backboard",
+    "chain-link fence",
+    "basketball pole",
+]
+# Threshold tuned for precision on real construction photos. OWLv2 returns
+# many low-confidence boxes; 0.20 is a reasonable balance.
+_SCORE_THRESHOLD = float(os.environ.get("AI_OBJDET_THRESHOLD", "0.20"))
+
+
+@dataclass(frozen=True)
+class Detection:
+    label: str
+    score: float
+    box: tuple[float, float, float, float]  # (x1, y1, x2, y2), in image pixels
+
+
+def _load_pipeline() -> Any | None:
+    """Lazy-load the OWLv2 detector. Returns None on any failure so the
+    caller can fall back to the heuristic-only path."""
+    global _PIPELINE, _PIPELINE_LOAD_ATTEMPTED
+    if _PIPELINE is not None or _PIPELINE_LOAD_ATTEMPTED:
+        return _PIPELINE
+    with _LOCK:
+        if _PIPELINE is not None or _PIPELINE_LOAD_ATTEMPTED:
+            return _PIPELINE
+        _PIPELINE_LOAD_ATTEMPTED = True
+        try:
+            # Local imports keep the FastAPI cold-start fast when detection
+            # is disabled or torch is missing.
+            from transformers import Owlv2Processor, Owlv2ForObjectDetection
+            import torch
+            model_id = os.environ.get(
+                "AI_OBJDET_MODEL", "google/owlv2-base-patch16-ensemble"
+            )
+            logger.info("Loading OWLv2 model %s ...", model_id)
+            processor = Owlv2Processor.from_pretrained(model_id)
+            model = Owlv2ForObjectDetection.from_pretrained(model_id)
+            model.eval()
+            _PIPELINE = (processor, model, torch)
+            logger.info("OWLv2 ready.")
+        except Exception as exc:
+            logger.warning("OWLv2 unavailable — falling back to heuristic only. (%s)", exc)
+            _PIPELINE = None
+        return _PIPELINE
+
+
+def detect_court_structures(
+    image_bgr,
+    *,
+    score_threshold: float | None = None,
+) -> list[Detection]:
+    """Run zero-shot detection on a BGR image array. Returns a flat list of
+    Detection objects. Empty list on any failure (model missing, etc.).
+
+    The image is expected as the OpenCV-decoded numpy array (BGR uint8) that
+    the predictor already has at hand — no extra decode required.
+    """
+    pipeline = _load_pipeline()
+    if pipeline is None:
+        return []
+    processor, model, torch = pipeline
+    threshold = _SCORE_THRESHOLD if score_threshold is None else score_threshold
+
+    try:
+        import cv2
+        import numpy as np
+        # OWLv2 wants PIL RGB. Convert in-place.
+        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        from PIL import Image
+        pil = Image.fromarray(rgb)
+        inputs = processor(text=[_PROMPTS], images=pil, return_tensors="pt")
+        with torch.no_grad():
+            outputs = model(**inputs)
+        target_sizes = torch.tensor([pil.size[::-1]])  # (H, W)
+        results = processor.post_process_object_detection(
+            outputs=outputs,
+            threshold=threshold,
+            target_sizes=target_sizes,
+        )[0]
+        out: list[Detection] = []
+        for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
+            out.append(Detection(
+                label=_PROMPTS[int(label)],
+                score=float(score),
+                box=tuple(float(v) for v in box.tolist()),
+            ))
+        return out
+    except Exception as exc:
+        logger.warning("OWLv2 inference failed (%s)", exc)
+        return []
+
+
+def summarize_detections(detections: list[Detection]) -> dict[str, Any]:
+    """Compact roll-up keyed on the labels we care about. Useful both as
+    debug output in `raw_predictions.features` and as a stable shape for the
+    predictor's stage-scoring rules."""
+    counts: dict[str, int] = {p: 0 for p in _PROMPTS}
+    best_score: dict[str, float] = {p: 0.0 for p in _PROMPTS}
+    for d in detections:
+        counts[d.label] = counts.get(d.label, 0) + 1
+        best_score[d.label] = max(best_score.get(d.label, 0.0), d.score)
+    return {
+        "backboard_count": counts.get("basketball backboard", 0),
+        "fence_count": counts.get("chain-link fence", 0),
+        "pole_count": counts.get("basketball pole", 0),
+        "backboard_score": round(best_score.get("basketball backboard", 0.0), 3),
+        "fence_score": round(best_score.get("chain-link fence", 0.0), 3),
+        "pole_score": round(best_score.get("basketball pole", 0.0), 3),
+        "total_detections": len(detections),
+    }

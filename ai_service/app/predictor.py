@@ -19,6 +19,7 @@ import numpy as np
 
 from .preprocessing import preprocess, decode_image
 from .stages import STAGES, stage_for_index, NUM_CLASSES
+from .object_detection import detect_court_structures, summarize_detections
 
 logger = logging.getLogger("ai-predictor")
 _LOCK = threading.Lock()
@@ -220,23 +221,37 @@ class Predictor:
 
     # ----------------- fallback heuristic -----------------
     def _heuristic(self, image_bytes: bytes):
-        """Center-weighted CV heuristic that grounds its prediction in physical
-        evidence: court line markings, the concrete/asphalt slab footprint, and
-        installed perimeter poles. Hard overrides prevent visually-impossible
-        stages from winning (e.g. you cannot be in 'site clearing' once the
-        concrete slab and painted court lines are both present).
+        """Real-photo-tuned CV heuristic.
 
-        Features (all center-weighted unless noted):
-          soil      — warm hue, mid saturation (stages 1-2)
-          gravel    — low saturation, mid value (stage 2)
-          slab      — low saturation, mid-high value, smooth (stage 3+)
-          asphalt   — uniformly dark surface (stage 4+)
-          white     — near-white pixels: court line markings on a slab (stage 5+)
-          long_white_lines — HoughLinesP count of long thin white segments
-          pole_count — near-vertical Hough lines (lights / hoop poles / fence posts)
+        Rewritten after the previous version misclassified real construction
+        photos: it confused gravel for concrete slab (both have low saturation)
+        and treated concrete-joint edges as "court lines". The current rules
+        instead lean on three things real photos give us clearly:
+
+          1. **Surface texture variance** (Laplacian) — gravel reads as high
+             texture, smooth concrete reads as low texture. This is what
+             separates stage 2 from stage 3 when colour cues fail.
+          2. **Painted-surface saturation** — finished basketball courts are
+             almost always painted in saturated colours (blue, green, red,
+             purple, ochre yellow). Raw concrete is grey, soil is desaturated
+             brown. A large saturated central region is the strongest single
+             cue that we have passed stage 4.
+          3. **Court lines gated on a painted background** — a long white
+             segment only counts as a *court marking* if it sits on a painted
+             surface. Otherwise it is a concrete joint, a wall edge, or a
+             reflection, and we ignore it.
+
+        Hard overrides at the bottom prevent visually-impossible stages from
+        winning (e.g. a fully painted court cannot be in 'site clearing').
         """
         import cv2
         bgr = decode_image(image_bytes)
+        # Run zero-shot object detection on the ORIGINAL (un-resized) image so
+        # small distant backboards aren't shrunk below detection threshold.
+        # Detection is best-effort: returns [] if OWLv2 is unavailable, in
+        # which case the heuristic still classifies stages 1-5 fine.
+        detections = detect_court_structures(bgr)
+        det = summarize_detections(detections)
         bgr = cv2.resize(bgr, (self.input_size, self.input_size))
         H, W = bgr.shape[:2]
         total = H * W
@@ -245,9 +260,6 @@ class Predictor:
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
         # Center weighting: 1.0 at the image centre, falling off to ~0 at corners.
-        # Construction photos almost always frame the court in the centre, with
-        # access roads / soil heaps / equipment at the edges. Whole-frame ratios
-        # let perimeter clutter dominate the central evidence.
         cy, cx = H / 2.0, W / 2.0
         yy, xx = np.mgrid[0:H, 0:W]
         radial = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
@@ -257,38 +269,87 @@ class Predictor:
         def cratio(mask: np.ndarray) -> float:
             return float((mask.astype(np.float32) * center_w).sum()) / center_total
 
+        # ----- colour masks -----
         soil_mask     = ((h >= 5) & (h <= 25) & (s > 40) & (s < 180) & (v > 50) & (v < 200))
-        gravel_mask   = ((s < 50) & (v > 80) & (v < 170))
-        # Slab covers concrete (bright grey) AND asphalt (dark grey). Real-photo
-        # courts span V≈70 (asphalt in shade) up to V≈220 (sunlit concrete).
-        slab_mask     = ((s < 55) & (v > 70) & (v < 230))
-        asphalt_mask  = ((s < 65) & (v < 90))
-        # Court paint after JPEG compression / oblique view typically lands
-        # around V=190-230. The previous V>215 threshold missed real photos.
-        white_mask    = ((s < 35) & (v > 195))
+        # Gravel = low saturation, mid value. Concrete also fits this colourwise,
+        # so we disambiguate with texture variance further down.
+        gravel_mask   = ((s < 55) & (v > 70) & (v < 180))
+        slab_mask     = ((s < 55) & (v > 80) & (v < 230))
+        asphalt_mask  = ((s < 60) & (v > 35) & (v < 95))
+        # Court paint: HIGH saturation pixels of *any* hue. Stage 5+ courts
+        # are blue/green/red/purple/yellow — this single mask covers them all.
+        painted_mask  = ((s > 75) & (v > 70))
+        white_mask    = ((s < 40) & (v > 190))
         metal_mask    = ((s < 30) & (v > 220))
 
         soil     = cratio(soil_mask)
         gravel   = cratio(gravel_mask)
-        slab     = cratio(slab_mask)
+        slab_col = cratio(slab_mask)
         asphalt  = cratio(asphalt_mask)
+        painted  = cratio(painted_mask)
         white    = cratio(white_mask)
         metal    = cratio(metal_mask)
 
-        # ----- largest connected slab/court region -----
-        # The thing that most reliably distinguishes a court from random
-        # construction debris is that the court is ONE BIG CONVEX GREY REGION.
-        # Find it via connected components on the slab mask, then measure how
-        # much of the frame the largest blob covers and how rectangular it is.
-        slab_or_asphalt = (slab_mask | asphalt_mask).astype(np.uint8)
-        slab_or_asphalt = cv2.morphologyEx(slab_or_asphalt, cv2.MORPH_CLOSE,
-                                            np.ones((5, 5), np.uint8), iterations=2)
-        n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(slab_or_asphalt, connectivity=8)
+        # ----- surface texture (laplacian variance on the centre square) -----
+        # Gravel courses are visually noisy — the laplacian fires on every rock
+        # edge, giving variance in the hundreds to thousands. Smooth concrete
+        # or acrylic court tiles give variance well under 200.
+        cy0, cy1 = H // 4, 3 * H // 4
+        cx0, cx1 = W // 4, 3 * W // 4
+        center_gray = gray[cy0:cy1, cx0:cx1]
+        lap_var = float(cv2.Laplacian(center_gray, cv2.CV_64F).var())
+        center_sat_mean = float(s[cy0:cy1, cx0:cx1].mean())
+
+        # ----- largest contiguous painted region -----
+        # Crucial: a real painted court is ONE big rectangular patch of saturated
+        # colour. Scattered saturated pixels (hi-viz vests, plant leaves, signs)
+        # form an irregularly-shaped blob with low rectangularity, even after
+        # morphological closing. We measure (a) coverage, (b) hue diversity, and
+        # (c) rectangularity (area / bbox_area) of that blob.
+        painted_mask_u8 = painted_mask.astype(np.uint8)
+        painted_mask_u8 = cv2.morphologyEx(painted_mask_u8, cv2.MORPH_CLOSE,
+                                            np.ones((7, 7), np.uint8), iterations=2)
+        pn, plabels, pstats, _ = cv2.connectedComponentsWithStats(painted_mask_u8, connectivity=8)
+        painted_blob_area = 0
+        painted_blob_frac = 0.0
+        painted_blob_dom_hues = 0
+        painted_blob_rectness = 0.0
+        if pn > 1:
+            pareas = pstats[1:, cv2.CC_STAT_AREA]
+            pidx = int(np.argmax(pareas)) + 1
+            painted_blob_area = int(pstats[pidx, cv2.CC_STAT_AREA])
+            painted_blob_frac = painted_blob_area / float(total)
+            pbw = int(pstats[pidx, cv2.CC_STAT_WIDTH])
+            pbh = int(pstats[pidx, cv2.CC_STAT_HEIGHT])
+            painted_blob_rectness = painted_blob_area / max(1, pbw * pbh)
+            if painted_blob_area > 400:
+                blob_mask_p = (plabels == pidx)
+                blob_h = h[blob_mask_p]
+                hue_h, _ = np.histogram(blob_h, bins=18, range=(0, 180))
+                peak_thresh_p = max(150, hue_h.max() * 0.30)
+                painted_blob_dom_hues = int((hue_h >= peak_thresh_p).sum())
+
+        # Frame-wide dominant-hue count on all saturated pixels (cheaper signal).
+        dominant_hues = 0
+        if painted_mask.sum() > 400:
+            sat_h = h[painted_mask]
+            hue_hist, _ = np.histogram(sat_h, bins=18, range=(0, 180))
+            peak_thresh = max(250, hue_hist.max() * 0.40)
+            dominant_hues = int((hue_hist >= peak_thresh).sum())
+
+        # ----- largest connected court-like region -----
+        # The court is one large coherent region — concrete-grey, asphalt-dark,
+        # or painted-saturated. Union all three; gravel is deliberately excluded
+        # because it's textured noise, not a coherent surface.
+        court_like = (slab_mask | asphalt_mask | painted_mask).astype(np.uint8)
+        court_like = cv2.morphologyEx(court_like, cv2.MORPH_CLOSE,
+                                       np.ones((5, 5), np.uint8), iterations=2)
+        n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(court_like, connectivity=8)
         biggest_blob_area = 0
         biggest_blob_rectness = 0.0
-        biggest_blob_box = None
+        biggest_blob_painted_frac = 0.0
+        biggest_blob_lap = 0.0
         if n_labels > 1:
-            # Skip background (label 0).
             areas = stats[1:, cv2.CC_STAT_AREA]
             biggest_idx = int(np.argmax(areas)) + 1
             biggest_blob_area = int(stats[biggest_idx, cv2.CC_STAT_AREA])
@@ -296,19 +357,25 @@ class Predictor:
                            int(stats[biggest_idx, cv2.CC_STAT_TOP]),
                            int(stats[biggest_idx, cv2.CC_STAT_WIDTH]),
                            int(stats[biggest_idx, cv2.CC_STAT_HEIGHT]))
-            bbox_area = max(1, w * hh)
-            biggest_blob_rectness = biggest_blob_area / bbox_area
-            biggest_blob_box = (x, y, w, hh)
+            biggest_blob_rectness = biggest_blob_area / max(1, w * hh)
+            blob_mask = (labels == biggest_idx)
+            # How much of the blob is painted (vs raw grey)?
+            biggest_blob_painted_frac = float((blob_mask & painted_mask).sum()) / max(1, biggest_blob_area)
+            # Texture variance restricted to the blob — used to distinguish a
+            # smooth slab from a noisy gravel area that snuck into the mask.
+            if blob_mask.sum() > 200:
+                blob_gray = gray.copy()
+                blob_gray[~blob_mask] = 0
+                # variance over the blob's bounding box only
+                bb = blob_gray[y:y+hh, x:x+w]
+                biggest_blob_lap = float(cv2.Laplacian(bb, cv2.CV_64F).var())
         biggest_blob_frac = biggest_blob_area / float(total)
-        # Strong slab evidence: a large, rectangular grey blob that fills a
-        # nontrivial fraction of the centre.
-        has_slab_blob = (biggest_blob_frac > 0.12 and biggest_blob_rectness > 0.45)
 
-        # ----- court line marking detection -----
-        # White pixels alone aren't enough (sky, reflections, white shirts can
-        # all match). We require *long thin* line segments — that's what painted
-        # court markings produce. HoughLinesP on the binarised white channel.
+        # ----- court line marking detection (gated on painted surface) -----
+        # Real court markings sit on a saturated background. Detecting white
+        # pixels alone fires on sky, reflections, concrete joints, dust.
         long_white_lines = 0
+        white_on_paint = 0
         if white_mask.sum() > 80:
             wm8 = (white_mask.astype(np.uint8)) * 255
             wm8 = cv2.morphologyEx(wm8, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
@@ -320,14 +387,21 @@ class Predictor:
                 maxLineGap=8,
             )
             if lines is not None:
+                # A line counts as a "court marking" if at least one endpoint —
+                # OR the segment midpoint — lies near a painted region. We dilate
+                # the painted mask a few pixels so a line that runs *along* a
+                # painted area still counts.
+                paint_dilated = cv2.dilate(painted_mask.astype(np.uint8),
+                                            np.ones((9, 9), np.uint8))
                 for x1, y1, x2, y2 in lines[:, 0]:
-                    if np.hypot(x2 - x1, y2 - y1) >= min(W, H) * 0.18:
-                        long_white_lines += 1
+                    if np.hypot(x2 - x1, y2 - y1) < min(W, H) * 0.18:
+                        continue
+                    long_white_lines += 1
+                    mx, my = (x1 + x2) // 2, (y1 + y2) // 2
+                    if 0 <= my < H and 0 <= mx < W and paint_dilated[my, mx]:
+                        white_on_paint += 1
 
         # ----- vertical pole + diagonal-fence-pattern detection -----
-        # Light poles, hoop posts, and fence posts all produce tall near-vertical
-        # edges. We separately count diagonal lines, which are a much stronger
-        # signal for chain-link fencing (stage 7) than poles alone.
         edges = cv2.Canny(gray, 80, 180)
         edge_density = float(edges.sum()) / (255.0 * total)
         plines = cv2.HoughLinesP(
@@ -338,85 +412,240 @@ class Predictor:
         )
         pole_count_raw = 0
         diagonal_count = 0
+        upper_vertical_xs: list[int] = []
         if plines is not None:
             for x1, y1, x2, y2 in plines[:, 0]:
                 dx, dy = abs(x2 - x1), abs(y2 - y1)
-                if dy >= 4 * max(dx, 1):                # near-vertical
+                if dy >= 4 * max(dx, 1):
                     pole_count_raw += 1
+                    # Tall vertical lines that reach into the upper half of the
+                    # frame are perimeter / hoop / fence poles. Track their x.
+                    if min(y1, y2) < H * 0.55:
+                        upper_vertical_xs.append((x1 + x2) // 2)
                 elif 0.6 <= dy / max(dx, 1) <= 1.8 and dx > W * 0.10:
-                    diagonal_count += 1                  # chain-link / X-pattern
-        # Hough returns multiple segments per physical pole — cap to dampen the
-        # over-count effect and keep this feature in a sensible range.
+                    diagonal_count += 1
         pole_count = min(pole_count_raw, 12)
 
-        # ----- evidence flags -----
-        # 3+ long white-line segments is a real-photo-friendly threshold; on
-        # synthetic data we see ~7-15 lines, on real photos we typically see 3-6.
-        has_court_lines = long_white_lines >= 3
-        has_strong_slab = slab > 0.18 or has_slab_blob
-        has_asphalt_surface = asphalt > 0.20
-        # Stage 7 = perimeter fencing. The defining visual cue is a chain-link
-        # X-pattern (many diagonal short-medium lines) — not poles alone, since
-        # light poles around an unfenced court would otherwise tip into stage 7.
-        has_fence_pattern = diagonal_count >= 6
+        # Spaced vertical-pole array: 2+ distinct poles spread across the frame
+        # is hard to fake with a single tree trunk or shadow. Used as Stage 6/7
+        # evidence even on a bare-concrete court.
+        pole_array_count = 0
+        if upper_vertical_xs:
+            xs = sorted(upper_vertical_xs)
+            kept = [xs[0]]
+            for x in xs[1:]:
+                if x - kept[-1] > W * 0.10:  # ≥10% of frame apart
+                    kept.append(x)
+            pole_array_count = len(kept)
+
+        # ----- backboard detection -----
+        # A basketball backboard is a bright (high-V, low-S) rectangle whose
+        # CENTRE is in the upper ~40% of the frame, with a tall vertical pole
+        # supporting it from below. Without the supporting-pole check this
+        # detector over-fires on workers' shirts, sky patches and white bags.
+        # Conservative version: only count close-up backboards (>4% of frame).
+        # Distant backboards are too easy to confuse with cloud patches / white
+        # equipment, and the false positives hurt more than the small wins
+        # would help. The trade-off here favours precision over recall.
+        bb_mask = ((s < 50) & (v > 195)).astype(np.uint8)
+        bb_mask = cv2.morphologyEx(bb_mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        bbn, _, bbstats, _ = cv2.connectedComponentsWithStats(bb_mask, connectivity=8)
+        backboard_count = 0
+        for i in range(1, bbn):
+            area = int(bbstats[i, cv2.CC_STAT_AREA])
+            # Only big, close-up backboards qualify. The 4% lower bound is
+            # what cuts out cloud patches and white shirts/equipment.
+            if area < total * 0.04 or area > total * 0.40:
+                continue
+            by = int(bbstats[i, cv2.CC_STAT_TOP])
+            bw = int(bbstats[i, cv2.CC_STAT_WIDTH])
+            bh = int(bbstats[i, cv2.CC_STAT_HEIGHT])
+            # Centre in the upper 45% of the frame.
+            if by + bh / 2.0 > H * 0.45:
+                continue
+            # Landscape aspect (slightly wider than tall).
+            if bw < bh * 1.0 or bw > bh * 2.5:
+                continue
+            # Solid rectangle.
+            if area / max(1, bw * bh) < 0.65:
+                continue
+            backboard_count += 1
+
+        # ----- derived evidence flags -----
+        # Gravel: very high local texture + cool/desaturated rocks. Three clauses:
+        #   (a) classic gravel-dominant photos,
+        #   (b) gravel+workers scenes where hi-viz pushes mean saturation up but
+        #       the surface texture is still rocky,
+        #   (c) very-rough warm-earth scenes (soil + scattered rocks) where the
+        #       gravel HSV mask is too tight to catch warm-lit rocks but the
+        #       texture energy is unmistakeably non-slab.
+        has_gravel_surface = (
+            (lap_var > 9000 and center_sat_mean < 60 and gravel > 0.30)
+            or (lap_var > 8000 and gravel > 0.18 and (soil + gravel) > 0.25)
+            or (lap_var > 9500 and (soil + gravel) > 0.25)
+        )
+
+        # Painted court: a LARGE, RECTANGULAR, HIGHLY-SATURATED, *SMOOTH* region.
+        # Scattered hi-viz vests / orange sand form a big saturated blob too —
+        # but they're either irregular (low rectangularity) OR textured (workers
+        # + wet concrete have high Laplacian variance, finished paint is flat).
+        # Golden-hour wet concrete looks "painted" by colour alone, so the
+        # texture check is what stops it being misclassified.
+        # A real multi-coloured painted court has high grayscale variance from
+        # the colour boundaries themselves — treat that as "smooth enough".
+        # Threshold tuned against real data: aq.jpeg (real partial paint) is
+        # ~5400, wet-concrete-in-golden-hour is ~7000, so the gate sits between.
+        smooth_enough = (biggest_blob_lap < 6500) or (painted_blob_dom_hues >= 3)
+        has_painted_court = (
+            (painted_blob_frac > 0.20 and center_sat_mean > 50
+              and painted_blob_rectness > 0.45 and smooth_enough)
+            or (painted_blob_frac > 0.10 and painted_blob_dom_hues >= 3
+                 and center_sat_mean > 50 and painted_blob_rectness > 0.40
+                 and smooth_enough)
+        ) and not has_gravel_surface
+
+        # Court lines: 3+ long white segments AND on a painted background.
+        has_court_lines = white_on_paint >= 3 and has_painted_court
+        # Concrete slab: large rectangular blob with *low* texture variance.
+        # The texture cap (lap_var < 8000) is what stops gravel-on-sub-base
+        # scenes from masquerading as slab — concrete is smooth, gravel is not.
+        # Saturation cap relaxed to 100 so golden-hour orange-tinted concrete
+        # still qualifies.
+        has_concrete_slab = (biggest_blob_frac > 0.30 and biggest_blob_rectness > 0.35 and
+                              center_sat_mean < 100 and lap_var < 8000 and
+                              not has_painted_court and not has_gravel_surface)
+        # Asphalt finish: large dark surface, no paint, no gravel.
+        has_asphalt_surface = asphalt > 0.25 and not has_painted_court and not has_gravel_surface
+        # Soil dominant: warm earthy hue covering the centre, no rectangle, no
+        # large slab-like blob. A sunset-lit concrete court reads as warm earthy
+        # too — so we require BOTH a high soil ratio AND the absence of a big
+        # rectangular blob before flagging this as bare ground.
+        has_soil_dominant = (soil > 0.40 and biggest_blob_frac < 0.30
+                              and not has_concrete_slab and not has_painted_court
+                              and not has_gravel_surface)
+        # ----- object-detection-driven flags -----
+        # OWLv2 zero-shot detector. Backboards and chain-link fences are highly
+        # specific — when OWLv2 finds them, we trust them. The "basketball pole"
+        # prompt is too generic (it fires on workers, sticks, light poles in
+        # background), so we only use pole counts as a *bonus*, never as the
+        # primary signal.
+        det_backboard = det["backboard_count"] >= 1
+        det_fence     = det["fence_count"] >= 1
+
+        # Strong fence: detector says so, OR the legacy painted-court diagonals.
+        has_strong_fence = det_fence
+        has_fence_pattern = (
+            det_fence
+            or (diagonal_count >= 10 and has_painted_court and has_court_lines)
+        )
+        # Hoops: backboard detection OR the legacy painted+metal combo. We do
+        # NOT use OWLv2 pole alone — it false-positives on workers and stakes.
+        has_backboard = det_backboard
+        has_pole_array = pole_array_count >= 3
+        has_hoop_signal = (
+            det_backboard
+            or (has_painted_court and has_court_lines and (metal > 0.04 or pole_count >= 2))
+        )
 
         # ----- per-stage scores -----
-        # Designed so a representative photo for each stage scores highest on its
-        # own row, and so impossible-given-evidence stages get strongly penalised.
+        # IMPORTANT: only penalize stages 1-3 by the *confirmed* painted signal.
+        # The raw `painted` ratio fires high on hi-viz vests + warm sandy ground;
+        # if `has_painted_court` is False we already know that's noise, so we
+        # must not let the noise penalty hand a default win to Stage 4.
+        real_paint = painted if has_painted_court else 0.0
+        # Texture energy normalised to roughly [0, 1] — high on gravel and wet
+        # concrete, near zero on smooth painted/concrete surfaces.
+        texture_signal = max(0.0, min((lap_var - 4000.0) / 8000.0, 1.0))
+
         scores = np.zeros(NUM_CLASSES, dtype=np.float32)
-        scores[0] = soil * 2.0 - slab * 1.5 - asphalt * 0.8 - white * 1.0       # bare ground
-        scores[1] = soil * 0.6 + gravel * 1.6 - slab * 0.8 - white * 1.0        # sub-base
-        scores[2] = slab * 2.5 - asphalt * 0.5 - long_white_lines * 0.3         # raw slab, no markings
-        scores[3] = asphalt * 2.0 + slab * 0.6 - soil * 0.5 - long_white_lines * 0.2  # surface finish
-        scores[4] = (white * 2.5 + long_white_lines * 0.5
-                     + (slab + asphalt) * 0.6 - soil * 0.6)                      # line marking
-        # Stages 6 and 7 (hoops / fencing) are *additive on top of* a finished
-        # painted court — they cannot occur on a bare site. Gate their
-        # vertical-edge / pole signal on court-line evidence so a sub-base photo
-        # with a couple of stake lines doesn't masquerade as fencing.
-        if has_court_lines:
-            # Hoops require court lines + nontrivial pole evidence near centre.
-            # Don't over-weight pole_count — Hough overcounts.
-            scores[5] = (metal * 1.6 + pole_count * 0.08
-                         + edge_density * 0.5 - soil * 0.3)                      # hoops
-            # Fencing requires the X-pattern of chain-link, not just vertical
-            # lines (light poles around an unfenced court would otherwise win).
-            scores[6] = (diagonal_count * 0.15 + pole_count * 0.05
-                         + edge_density * 0.6 - soil * 0.5 - slab * 0.2)         # fencing
+
+        # Stage 1: bare ground. Soil rules; no painted area, no slab.
+        scores[0] = (soil * 2.0 - real_paint * 4.0 - biggest_blob_frac * 1.5
+                     - white * 0.5 - asphalt * 1.0)
+        if has_soil_dominant:
+            scores[0] += 1.5
+
+        # Stage 2: gravel sub-base. Strong on gravel colour + texture; no need
+        # for a painted-court vote here, the gravel surface signal speaks for it.
+        scores[1] = (gravel * 1.5 + texture_signal * 1.5
+                     - real_paint * 4.0 - white * 1.0)
+        if has_gravel_surface:
+            scores[1] += 2.5
+
+        # Stage 3: raw concrete slab — large smooth grey blob, no paint, no lines.
+        scores[2] = (slab_col * 1.5 - real_paint * 3.0 - long_white_lines * 0.15
+                     - texture_signal * 1.2)  # very rough surface != smooth slab
+        if has_concrete_slab and not has_painted_court and not has_court_lines:
+            scores[2] += 2.5
+
+        # Stage 4: surface finishing — asphalt OR painted court without markings.
+        # Crucially, Stage 4 should NOT be the default winner just because the
+        # other stages are penalised. Start it at a low base.
+        scores[3] = -1.0
+        if has_painted_court and not has_court_lines:
+            scores[3] = 2.2
+        elif has_asphalt_surface:
+            scores[3] = 2.0
+
+        # Stage 5: line marking. Needs painted court + multiple white segments on it.
+        if has_painted_court and has_court_lines:
+            scores[4] = 2.0 + min(white_on_paint, 10) * 0.18 + painted * 1.0
         else:
-            scores[5] = -2.0  # impossible without a finished court
-            scores[6] = -2.0
+            scores[4] = -2.0
+
+        # Stage 6: hoops. A detector backboard hit is the strongest evidence —
+        # weight it high enough to beat painted-court-without-hoops (Stage 5).
+        if has_hoop_signal:
+            scores[5] = (1.8
+                         + (det["backboard_count"] * 1.0)
+                         + (det["pole_count"] * 0.4)
+                         + (det["backboard_score"] * 1.5)
+                         + metal * 1.0
+                         + min(pole_count, 6) * 0.10)
+        else:
+            scores[5] = -3.0
+
+        # Stage 7: fencing. A detector fence hit dominates — chain-link being
+        # installed is the final visible activity in real-world construction.
+        if has_fence_pattern:
+            scores[6] = (1.6
+                         + (det["fence_count"] * 0.8)
+                         + (det["fence_score"] * 1.5)
+                         + min(diagonal_count, 30) * 0.03)
+            # If we ALSO see a backboard, the project is in late Stage 7
+            # (court complete, perimeter going in).
+            if det_backboard:
+                scores[6] += 0.4
+        else:
+            scores[6] = -3.0
 
         # ----- hard evidence overrides -----
-        # Once you can see painted court lines, you cannot still be in clearing,
-        # sub-base, or even raw-slab — the surface finish is necessarily done.
+        # A painted surface eliminates everything below stage 4.
+        if has_painted_court:
+            scores[0] -= 8.0
+            scores[1] -= 8.0
+            scores[2] -= 5.0
+        # Court line markings (on paint) eliminate stages 1-3 and bias above stage 3.
         if has_court_lines:
-            scores[0] -= 6.0
-            scores[1] -= 6.0
-            scores[2] -= 4.0
-        # A large rectangular grey blob is a court/slab — rules out the dirt-
-        # only stages even when soil dominates the perimeter.
-        if has_slab_blob:
+            scores[0] -= 8.0
+            scores[1] -= 8.0
+            scores[2] -= 6.0
+            scores[3] -= 1.0
+        # Visible concrete slab eliminates stages 1 and 2.
+        if has_concrete_slab:
             scores[0] -= 6.0
             scores[1] -= 5.0
-            # Without lines yet, reward stage 3 (raw slab); with lines, the
-            # court-lines branch above already locks it into stage 4+.
-            if not has_court_lines:
-                scores[2] += 1.5
-            else:
-                scores[3] += 0.5
-                scores[4] += 0.5
-        # A real slab (>18% of the centre region) rules out clearing & sub-base.
-        if has_strong_slab or has_asphalt_surface:
-            scores[0] -= 5.0
-            scores[1] -= 4.0
-        # Strong stage-7 boost requires a real chain-link/fence pattern, not
-        # merely the presence of many vertical poles (which could be lighting).
-        if has_court_lines and has_fence_pattern:
-            scores[6] += 1.5
+        # High-texture gravel eliminates "finished" stages — sub-base cannot have
+        # poured slab or court paint by definition.
+        if has_gravel_surface:
+            scores[2] -= 3.0
+            scores[3] -= 4.0
+            scores[4] -= 6.0
+            scores[5] -= 6.0
+            scores[6] -= 6.0
 
-        # Softmax with temperature.
-        temperature = 0.7
+        # ----- soft-max with temperature -----
+        temperature = 0.6
         z = scores / temperature
         e = np.exp(z - z.max())
         probs = e / e.sum()
@@ -428,10 +657,13 @@ class Predictor:
         top1, top2 = probs[sorted_idx[0]], probs[sorted_idx[1]]
         margin = float((top1 - top2) / max(top1, 1e-6))
 
-        # Within-band position. For stage 5, place it earlier in the band when
-        # only a few lines are detected and later when many are.
-        if idx == 4:  # line marking
-            position = min(1.0, 0.25 + 0.12 * long_white_lines)
+        # Within-band position
+        if idx == 4:  # line marking: more lines = later in band
+            position = min(1.0, 0.25 + 0.10 * white_on_paint)
+        elif idx == 1:  # gravel: more gravel coverage = later in band
+            position = min(1.0, 0.30 + 1.2 * gravel)
+        elif idx == 2:  # raw slab: bigger blob = later in band
+            position = min(1.0, 0.30 + 0.8 * biggest_blob_frac)
         else:
             position = max(0.0, min(1.0, 0.3 + 0.7 * margin))
         progress = stage.progress_lo + position * (stage.progress_hi - stage.progress_lo)
@@ -442,20 +674,40 @@ class Predictor:
         raw["features"] = {
             "soil": round(soil, 3),
             "gravel": round(gravel, 3),
-            "slab": round(slab, 3),
+            "slab": round(slab_col, 3),
             "asphalt": round(asphalt, 3),
+            "painted": round(painted, 3),
             "white": round(white, 3),
             "metal": round(metal, 3),
             "edge_density": round(edge_density, 3),
+            "lap_var": round(lap_var, 1),
+            "center_sat_mean": round(center_sat_mean, 1),
+            "dominant_hues": int(dominant_hues),
+            "painted_blob_frac": round(painted_blob_frac, 3),
+            "painted_blob_dom_hues": int(painted_blob_dom_hues),
+            "painted_blob_rectness": round(painted_blob_rectness, 3),
             "long_white_lines": int(long_white_lines),
+            "white_on_paint": int(white_on_paint),
             "pole_count": int(pole_count),
+            "pole_array_count": int(pole_array_count),
+            "backboard_count": int(backboard_count),
             "diagonal_count": int(diagonal_count),
             "biggest_blob_frac": round(biggest_blob_frac, 3),
             "biggest_blob_rectness": round(biggest_blob_rectness, 3),
+            "biggest_blob_painted_frac": round(biggest_blob_painted_frac, 3),
+            "biggest_blob_lap": round(biggest_blob_lap, 1),
             "has_court_lines": bool(has_court_lines),
-            "has_strong_slab": bool(has_strong_slab),
-            "has_slab_blob": bool(has_slab_blob),
+            "has_painted_court": bool(has_painted_court),
+            "has_gravel_surface": bool(has_gravel_surface),
+            "has_concrete_slab": bool(has_concrete_slab),
+            "has_asphalt_surface": bool(has_asphalt_surface),
+            "has_soil_dominant": bool(has_soil_dominant),
             "has_fence_pattern": bool(has_fence_pattern),
+            "has_strong_fence": bool(has_strong_fence),
+            "has_hoop_signal": bool(has_hoop_signal),
+            "has_backboard": bool(has_backboard),
+            "has_pole_array": bool(has_pole_array),
+            "owlv2": det,
         }
         return stage, progress, confidence, raw
 

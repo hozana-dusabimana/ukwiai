@@ -11,6 +11,14 @@ Pillow==10.4.0
 scikit-learn==1.5.2
 pandas==2.2.3
 
+# Zero-shot object detection (OWLv2 for backboard / chain-link / pole)
+# torch is CPU-only to keep the image lean; the OWLv2 base model is ~600 MB
+# and downloads on first use via Hugging Face's cache.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1
+transformers==4.45.2
+accelerate==0.34.2
+
 # Dataset preparation
 kaggle==1.6.17
 
