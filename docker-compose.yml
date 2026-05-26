@@ -83,13 +83,18 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api}
     container_name: ukwi_frontend
     restart: unless-stopped
     depends_on: [backend]
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      BACKEND_URL: http://backend:8000
+      BACKEND_PUBLIC_URL: ${BACKEND_PUBLIC_URL:-http://localhost:8000}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@ukwi.rw}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-ChangeMe!2026}
     ports:
-      - "80:80"
+      - "80:3000"
     networks: [ukwi_net]
 
 volumes:

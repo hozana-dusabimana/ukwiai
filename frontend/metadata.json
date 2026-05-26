@@ -1,0 +1,6 @@
+{
+  "name": "UKWI Construction Monitor",
+  "description": "Multimodal computer vision construction integrity scanner integrating Gemini AI modeling to optimize automated scheduling, safety compliance, phase checks, and budget auditing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
