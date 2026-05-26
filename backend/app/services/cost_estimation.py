@@ -1,4 +1,6 @@
 from __future__ import annotations
+import re
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
@@ -8,6 +10,7 @@ from app.models.project import Project
 from app.models.budget import BudgetRecord
 from app.models.cost import CostEstimation, DeviationStatus
 from app.models.image import SiteImage
+from app.models.stage import ProjectStage, ConstructionStage, ProjectStageStatus
 
 
 def _q(value: Decimal) -> Decimal:
@@ -79,3 +82,115 @@ def compute_cost_estimation(
         db.add(estimation)
         db.flush()
     return estimation
+
+
+def total_ai_inferred_cost(db: Session, project_id: int) -> Decimal:
+    total = db.scalar(
+        select(func.coalesce(func.sum(ProjectStage.ai_inferred_cost), 0))
+        .where(ProjectStage.project_id == project_id)
+    )
+    return Decimal(str(total or 0))
+
+
+def _normalize(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def apply_ai_inferred_progress(
+    db: Session,
+    project_id: int,
+    predicted_stage_name: str | None,
+    predicted_progress_percentage: Decimal | float | int | None,
+) -> int:
+    """Overlay the latest AI prediction onto each project_stage row.
+
+    Rules:
+      - stages BEFORE the predicted stage → ai_inferred_cost = allocated_budget,
+        status promoted to `completed` (only if currently not_started/in_progress),
+        actual_start_date/actual_end_date filled if still null.
+      - the predicted stage → ai_inferred_cost = allocated_budget × within-stage fill,
+        status promoted to `in_progress` (or `completed` if predicted >= 98 %).
+      - stages AFTER the predicted stage → ai_inferred_cost = 0, status unchanged.
+
+    Returns the number of project_stage rows touched.
+    """
+    if not predicted_stage_name:
+        return 0
+    if predicted_progress_percentage is None:
+        return 0
+
+    rows = db.execute(
+        select(ProjectStage, ConstructionStage)
+        .join(ConstructionStage, ProjectStage.stage_id == ConstructionStage.id)
+        .where(ProjectStage.project_id == project_id)
+        .order_by(ConstructionStage.stage_order)
+    ).all()
+    if not rows:
+        return 0
+
+    pred = _normalize(predicted_stage_name)
+    predicted_row = next(
+        (cs for _, cs in rows if _normalize(cs.stage_name) == pred),
+        None,
+    ) or next(
+        (cs for _, cs in rows if pred in _normalize(cs.stage_name) or _normalize(cs.stage_name) in pred),
+        None,
+    )
+    if predicted_row is None:
+        return 0
+
+    predicted_order = predicted_row.stage_order
+    overall_progress = max(Decimal("0"), min(Decimal("100"), Decimal(str(predicted_progress_percentage))))
+
+    # Compute within-stage fill for the predicted stage using each stage's
+    # `expected_progress_percentage` as the end-of-stage threshold.
+    stages_by_order = {cs.stage_order: cs for _, cs in rows}
+    prev_cs = stages_by_order.get(predicted_order - 1)
+    curr_cs = stages_by_order[predicted_order]
+    prev_end = Decimal(str(prev_cs.expected_progress_percentage)) if prev_cs else Decimal("0")
+    curr_end = Decimal(str(curr_cs.expected_progress_percentage))
+    span = curr_end - prev_end if curr_end > prev_end else Decimal("100")
+    within_fraction = (overall_progress - prev_end) / span
+    if within_fraction < 0:
+        within_fraction = Decimal("0")
+    if within_fraction > 1:
+        within_fraction = Decimal("1")
+
+    today = date.today()
+    touched = 0
+
+    for ps, cs in rows:
+        alloc = Decimal(str(ps.allocated_budget or 0))
+        if cs.stage_order < predicted_order:
+            ps.ai_inferred_cost = _q(alloc)
+            if ps.status in (ProjectStageStatus.not_started, ProjectStageStatus.in_progress):
+                ps.status = ProjectStageStatus.completed
+            if ps.actual_start_date is None:
+                ps.actual_start_date = today
+            if ps.actual_end_date is None:
+                ps.actual_end_date = today
+            touched += 1
+        elif cs.stage_order == predicted_order:
+            if overall_progress >= Decimal("98"):
+                ps.ai_inferred_cost = _q(alloc)
+                if ps.status != ProjectStageStatus.completed:
+                    ps.status = ProjectStageStatus.completed
+                if ps.actual_start_date is None:
+                    ps.actual_start_date = today
+                if ps.actual_end_date is None:
+                    ps.actual_end_date = today
+            else:
+                ps.ai_inferred_cost = _q(alloc * within_fraction)
+                if ps.status == ProjectStageStatus.not_started:
+                    ps.status = ProjectStageStatus.in_progress
+                if ps.actual_start_date is None:
+                    ps.actual_start_date = today
+            touched += 1
+        else:
+            # Strictly clear any stale AI estimate on stages now considered future.
+            if ps.ai_inferred_cost != Decimal("0"):
+                ps.ai_inferred_cost = Decimal("0")
+                touched += 1
+
+    db.flush()
+    return touched

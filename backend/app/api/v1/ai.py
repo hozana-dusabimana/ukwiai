@@ -16,7 +16,7 @@ from app.models.user import User
 from app.schemas.analysis import ProgressAnalysisOut, AnalyzeResponse
 from app.schemas.cost import CostEstimationOut
 from app.services.ai_client import ai_client, AIServiceError
-from app.services.cost_estimation import compute_cost_estimation
+from app.services.cost_estimation import compute_cost_estimation, apply_ai_inferred_progress
 from app.services.alerts import evaluate_cost_alerts
 from app.services.audit import log_action
 from app.services.access import user_can_access
@@ -109,6 +109,16 @@ async def analyze_image(
 
     estimation = compute_cost_estimation(db, proj, analysis.predicted_progress_percentage, image=image)
     evaluate_cost_alerts(db, proj, estimation)
+
+    # Push the AI's stage detection back into project_stages so the budget
+    # breakdown and timeline reflect what the camera saw, even before an
+    # accountant logs real BudgetRecord rows.
+    apply_ai_inferred_progress(
+        db,
+        proj.id,
+        analysis.predicted_stage,
+        analysis.predicted_progress_percentage,
+    )
 
     log_action(db, user.id, "ai.analyze", "image", image.id, details={"project_id": proj.id})
     db.commit()

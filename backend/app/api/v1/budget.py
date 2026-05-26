@@ -13,7 +13,7 @@ from app.models.user import User
 from app.schemas.budget import ExpenseCreate, ExpenseUpdate, ExpenseOut, BudgetSummary
 from app.services.audit import log_action
 from app.services.access import user_can_access
-from app.services.cost_estimation import total_recorded_expenses
+from app.services.cost_estimation import total_recorded_expenses, total_ai_inferred_cost
 
 router = APIRouter(tags=["budget"])
 
@@ -135,6 +135,7 @@ def delete_expense(
 def budget_summary(project_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
     p = _load_project_or_403(db, project_id, user)
     spent = total_recorded_expenses(db, project_id)
+    ai_spent = total_ai_inferred_cost(db, project_id)
     by_cat_rows = db.execute(
         select(BudgetRecord.expense_category, func.coalesce(func.sum(BudgetRecord.amount), 0))
         .where(BudgetRecord.project_id == project_id)
@@ -151,38 +152,61 @@ def budget_summary(project_id: int, db: Annotated[Session, Depends(get_db)], use
     ).all()
     by_stage = {(name or "unassigned"): Decimal(str(amt or 0)) for name, amt in by_stage_rows}
 
+    total_budget = Decimal(str(p.total_budget or 0))
+    # effective_total_spent = max of recorded vs AI-inferred (recorded always wins
+    # if present because it's ground truth; AI fills the gap when nothing is logged).
+    effective = spent if spent > ai_spent else ai_spent
     return BudgetSummary(
-        total_budget=Decimal(str(p.total_budget or 0)),
+        total_budget=total_budget,
         total_spent=spent,
-        remaining=Decimal(str(p.total_budget or 0)) - spent,
-        spent_percent=float(spent) / float(p.total_budget) * 100 if p.total_budget else 0.0,
+        remaining=total_budget - spent,
+        spent_percent=float(spent) / float(total_budget) * 100 if total_budget else 0.0,
         by_category=by_cat,
         by_stage=by_stage,
+        total_ai_inferred_cost=ai_spent,
+        effective_total_spent=effective,
+        effective_spent_percent=float(effective) / float(total_budget) * 100 if total_budget else 0.0,
+        effective_remaining=total_budget - effective,
     )
 
 
 @router.get("/projects/{project_id}/budget/breakdown")
 def breakdown(project_id: int, db: Annotated[Session, Depends(get_db)], user: CurrentUser):
-    """Allocated vs actual cost per stage."""
+    """Allocated vs actual cost per stage.
+
+    Each row carries TWO spend numbers:
+      - actual_cost: sum of recorded BudgetRecord rows (ground truth, additive)
+      - ai_inferred_cost: latest AI-driven estimate based on photos
+                          (overwritten on every /api/ai/analyze-image call)
+    The frontend picks which to show; we send both so the UI never has to fake values.
+    """
     _load_project_or_403(db, project_id, user)
     rows = db.execute(
         select(
             ConstructionStage.stage_name,
             ProjectStage.allocated_budget,
             ProjectStage.actual_cost,
+            ProjectStage.ai_inferred_cost,
             ProjectStage.status,
         )
         .join(ConstructionStage, ProjectStage.stage_id == ConstructionStage.id)
         .where(ProjectStage.project_id == project_id)
         .order_by(ConstructionStage.stage_order)
     ).all()
-    return [
-        {
+    out = []
+    for name, allocated, actual, ai_cost, st in rows:
+        alloc_v = float(allocated or 0)
+        actual_v = float(actual or 0)
+        ai_v = float(ai_cost or 0)
+        # effective_spent = whichever is larger (recorded expense overrides AI estimate)
+        effective = max(actual_v, ai_v)
+        out.append({
             "stage_name": name,
-            "allocated_budget": float(allocated or 0),
-            "actual_cost": float(actual or 0),
-            "remaining": float((allocated or 0) - (actual or 0)),
+            "allocated_budget": alloc_v,
+            "actual_cost": actual_v,
+            "ai_inferred_cost": ai_v,
+            "effective_spent": effective,
+            "remaining": alloc_v - effective,
             "status": st.value if st else None,
-        }
-        for name, allocated, actual, st in rows
-    ]
+        })
+    return out

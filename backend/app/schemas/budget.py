@@ -41,3 +41,9 @@ class BudgetSummary(BaseModel):
     spent_percent: float
     by_category: dict[str, Decimal]
     by_stage: dict[str, Decimal]
+    # AI-inferred spend (sum of project_stages.ai_inferred_cost). Refreshed
+    # by /api/ai/analyze-image; zero until the first analysis runs.
+    total_ai_inferred_cost: Decimal = Decimal("0")
+    effective_total_spent: Decimal = Decimal("0")
+    effective_spent_percent: float = 0.0
+    effective_remaining: Decimal = Decimal("0")

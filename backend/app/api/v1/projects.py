@@ -19,7 +19,7 @@ from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectOut, ProjectStatusUpdate, ProjectSummary,
     AssigneeIn, AssigneeOut,
 )
-from app.services.cost_estimation import total_recorded_expenses
+from app.services.cost_estimation import total_recorded_expenses, total_ai_inferred_cost
 from app.services.audit import log_action
 from app.services.access import scope_projects, user_can_access
 
@@ -166,6 +166,8 @@ def project_summary(project_id: int, db: Annotated[Session, Depends(get_db)], us
         raise HTTPException(403, "You are not assigned to this project.")
 
     total_spent = total_recorded_expenses(db, p.id)
+    ai_spent = total_ai_inferred_cost(db, p.id)
+    effective_spent = total_spent if total_spent > ai_spent else ai_spent
     latest_a = db.scalars(
         select(ProgressAnalysis)
         .where(ProgressAnalysis.project_id == p.id)
@@ -185,6 +187,8 @@ def project_summary(project_id: int, db: Annotated[Session, Depends(get_db)], us
     return ProjectSummary(
         project=p,
         total_expenses=total_spent,
+        total_ai_inferred_cost=ai_spent,
+        effective_total_spent=effective_spent,
         latest_progress=float(latest_a.predicted_progress_percentage) if latest_a and latest_a.predicted_progress_percentage is not None else None,
         latest_confidence=float(latest_a.confidence_score) if latest_a and latest_a.confidence_score is not None else None,
         deviation_status=latest_e.deviation_status.value if latest_e else None,
@@ -219,6 +223,8 @@ def project_timeline(project_id: int, db: Annotated[Session, Depends(get_db)], u
             "actual_end_date": ps.actual_end_date,
             "allocated_budget": float(ps.allocated_budget),
             "actual_cost": float(ps.actual_cost),
+            "ai_inferred_cost": float(ps.ai_inferred_cost),
+            "effective_spent": float(max(ps.actual_cost, ps.ai_inferred_cost)),
             "status": ps.status.value,
         }
         for ps, s in rows

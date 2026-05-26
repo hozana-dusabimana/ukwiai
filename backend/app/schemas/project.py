@@ -53,6 +53,10 @@ class ProjectOut(ProjectBase):
 class ProjectSummary(BaseModel):
     project: ProjectOut
     total_expenses: Decimal
+    # AI-derived: refreshed on each /api/ai/analyze-image. Zero until first analysis.
+    total_ai_inferred_cost: Decimal = Decimal("0")
+    # Effective = max(recorded, ai). Use this in UI cards.
+    effective_total_spent: Decimal = Decimal("0")
     latest_progress: float | None
     latest_confidence: float | None
     deviation_status: str | None

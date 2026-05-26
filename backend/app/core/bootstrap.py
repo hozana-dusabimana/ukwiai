@@ -89,6 +89,31 @@ def _create_database_if_missing() -> None:
     logger.info("Database '%s' ready", settings.DB_NAME)
 
 
+def _add_missing_columns(conn) -> None:
+    """Idempotent in-place column adds for tables that have evolved since the
+    last create_all. `create_all` only adds missing TABLES, not missing COLUMNS,
+    so anything added to an existing model needs an ALTER here.
+
+    Each block must check existence first so it stays idempotent across restarts.
+    """
+    is_mysql = not settings.database_url.startswith("sqlite")
+
+    if is_mysql:
+        existing = {row[0] for row in conn.execute(text(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'project_stages'"
+        )).all()}
+    else:
+        existing = {row[1] for row in conn.execute(text("PRAGMA table_info(project_stages)")).all()}
+
+    if "ai_inferred_cost" not in existing:
+        conn.execute(text(
+            "ALTER TABLE project_stages "
+            "ADD COLUMN ai_inferred_cost DECIMAL(15,2) NOT NULL DEFAULT 0"
+        ))
+        logger.info("Added column project_stages.ai_inferred_cost")
+
+
 def _create_tables() -> None:
     """Run create_all under a MySQL named lock so concurrent Gunicorn workers
     do not race each other into duplicate-CREATE-TABLE errors. SQLite has no
@@ -96,6 +121,8 @@ def _create_tables() -> None:
     """
     if settings.database_url.startswith("sqlite"):
         Base.metadata.create_all(bind=engine)
+        with engine.begin() as conn:
+            _add_missing_columns(conn)
         logger.info("Schema synced — %d tables", len(Base.metadata.tables))
         return
 
@@ -107,6 +134,7 @@ def _create_tables() -> None:
             return
         try:
             Base.metadata.create_all(bind=engine)
+            _add_missing_columns(conn)
             logger.info("Schema synced — %d tables", len(Base.metadata.tables))
         finally:
             conn.execute(text("SELECT RELEASE_LOCK(:n)"), {"n": lock_name})

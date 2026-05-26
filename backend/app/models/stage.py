@@ -38,6 +38,11 @@ class ProjectStage(Base):
     actual_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     allocated_budget: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=Decimal("0"), nullable=False)
     actual_cost: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=Decimal("0"), nullable=False)
+    # Spend inferred from the latest AI analysis (per-stage). Refreshed after each call to
+    # /api/ai/analyze-image so the budget breakdown can show non-zero values even before
+    # an accountant logs real BudgetRecord rows. Kept separate from actual_cost so that
+    # recorded expenses (additive) and AI inference (overwritten each run) don't fight.
+    ai_inferred_cost: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=Decimal("0"), nullable=False)
     status: Mapped[ProjectStageStatus] = mapped_column(
         SAEnum(ProjectStageStatus, native_enum=False, length=20),
         default=ProjectStageStatus.not_started,
