@@ -7,9 +7,11 @@ import {
   ScrollText,
   FileText,
   Settings,
-  HelpCircle,
   FileBarChart2,
+  Users,
 } from "lucide-react";
+import { useAuth } from "../auth/AuthContext";
+import { capabilitiesFor, roleLabel } from "../lib/roles";
 
 interface SidebarProps {
   currentTab: string;
@@ -24,18 +26,24 @@ export default function Sidebar({
   onNewAnalysisTriggered,
   activeProject,
 }: SidebarProps) {
+  const { user } = useAuth();
+  const caps = capabilitiesFor(user?.role);
+
   const projectName = activeProject?.name || "No active project";
   const projectLocation = activeProject?.location || "Awaiting first project";
   const projectInitial = (activeProject?.name?.[0] || "U").toUpperCase();
-  const tabs = [
-    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { id: "ai-analysis", label: "AI Analysis", icon: Cpu },
-    { id: "projects", label: "Projects", icon: Building },
-    { id: "financials", label: "Financials", icon: Coins },
-    { id: "site-logs", label: "Site Logs", icon: ScrollText },
-    { id: "reports", label: "Reports", icon: FileBarChart2 },
-    { id: "system-health", label: "System Health", icon: FileText }
+
+  const allTabs = [
+    { id: "dashboard",     label: "Dashboard",     icon: LayoutDashboard, show: caps.canSeeDashboard },
+    { id: "ai-analysis",   label: "AI Analysis",   icon: Cpu,             show: caps.canSeeAiAnalysis },
+    { id: "projects",      label: "Projects",      icon: Building,        show: caps.canSeeProjects },
+    { id: "financials",    label: "Financials",    icon: Coins,           show: caps.canSeeFinancials },
+    { id: "site-logs",     label: "Site Logs",     icon: ScrollText,      show: caps.canSeeSiteLogs },
+    { id: "reports",       label: "Reports",       icon: FileBarChart2,   show: caps.canSeeReports },
+    { id: "users",         label: "Users",         icon: Users,           show: caps.canSeeUsers },
+    { id: "system-health", label: "System Health", icon: FileText,        show: caps.canSeeSystemHealth },
   ];
+  const tabs = allTabs.filter((t) => t.show);
 
   return (
     <aside className="hidden md:flex flex-col h-[calc(100vh-64px)] w-64 bg-white border-r border-gray-200 py-6 fixed left-0 top-16 z-30 select-none">
@@ -52,12 +60,19 @@ export default function Sidebar({
           </div>
         </div>
 
-        <button
-          onClick={onNewAnalysisTriggered}
-          className="w-full bg-orange-600 hover:bg-orange-700 text-white py-2 px-4 rounded font-semibold text-xs uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
-        >
-          New Analysis
-        </button>
+        {caps.canRunAi && (
+          <button
+            onClick={onNewAnalysisTriggered}
+            className="w-full bg-orange-600 hover:bg-orange-700 text-white py-2 px-4 rounded font-semibold text-xs uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
+          >
+            New Analysis
+          </button>
+        )}
+        {!caps.canRunAi && (
+          <div className="w-full bg-gray-50 border border-gray-200 text-gray-500 py-2 px-4 rounded text-[10px] uppercase tracking-widest font-bold text-center">
+            {roleLabel(user?.role)} · Read only
+          </div>
+        )}
       </div>
 
       <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
@@ -93,17 +108,9 @@ export default function Sidebar({
           <Settings className="w-5 h-5 text-gray-400" />
           <span className="font-sans text-xs font-bold uppercase tracking-wider">Settings</span>
         </button>
-        <button
-          onClick={() => setCurrentTab("support")}
-          className={`w-full flex items-center gap-3.5 px-4 py-2 rounded text-left transition-colors ${
-            currentTab === "support"
-              ? "bg-sky-50 text-slate-900"
-              : "text-gray-500 hover:bg-gray-50"
-          }`}
-        >
-          <HelpCircle className="w-5 h-5 text-gray-400" />
-          <span className="font-sans text-xs font-bold uppercase tracking-wider">Support</span>
-        </button>
+        <div className="px-4 py-2 text-[10px] text-gray-400 font-mono uppercase tracking-wider truncate">
+          {user?.email}
+        </div>
       </div>
     </aside>
   );

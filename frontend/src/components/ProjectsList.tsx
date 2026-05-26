@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { Plus, Search, ArrowRight, Building, MapPin } from "lucide-react";
 import { api } from "../lib/api";
+import { useAuth } from "../auth/AuthContext";
+import { capabilitiesFor } from "../lib/roles";
 import { useToast } from "../ui/Toast";
 import { PageLoader, InlineError, EmptyState, Modal } from "../ui/primitives";
 
@@ -23,6 +25,8 @@ interface ProjectsListProps {
 
 export default function ProjectsList({ onOpenProject }: ProjectsListProps) {
   const toast = useToast();
+  const { user } = useAuth();
+  const caps = capabilitiesFor(user?.role);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,9 +64,11 @@ export default function ProjectsList({ onOpenProject }: ProjectsListProps) {
           <h1 className="font-sans text-2xl font-bold text-gray-950">Project Portfolio</h1>
           <p className="text-xs text-gray-500 mt-1">All UKWI basketball-court projects under monitoring.</p>
         </div>
-        <button onClick={() => setOpenCreate(true)} className="bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs uppercase tracking-wider py-2 px-4 rounded flex items-center gap-1.5 self-start md:self-auto">
-          <Plus className="w-4 h-4" /> New project
-        </button>
+        {caps.canCreateProject && (
+          <button onClick={() => setOpenCreate(true)} className="bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs uppercase tracking-wider py-2 px-4 rounded flex items-center gap-1.5 self-start md:self-auto">
+            <Plus className="w-4 h-4" /> New project
+          </button>
+        )}
       </header>
 
       <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm flex flex-col md:flex-row gap-3">
@@ -84,7 +90,7 @@ export default function ProjectsList({ onOpenProject }: ProjectsListProps) {
         <EmptyState
           title="No projects match"
           body="Try clearing filters or creating a new project."
-          action={<button onClick={() => setOpenCreate(true)} className="bg-orange-600 text-white text-xs font-bold uppercase tracking-wider px-4 py-2 rounded">Create project</button>}
+          action={caps.canCreateProject ? <button onClick={() => setOpenCreate(true)} className="bg-orange-600 text-white text-xs font-bold uppercase tracking-wider px-4 py-2 rounded">Create project</button> : undefined}
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

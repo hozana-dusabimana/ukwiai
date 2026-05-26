@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import hash_password
 from app.core.deps import require_admin, CurrentUser
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.user import UserCreate, UserUpdate, UserOut
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -28,6 +28,27 @@ def list_users(
     if role:
         stmt = stmt.where(User.role == role)
     stmt = stmt.order_by(User.id).offset(skip).limit(limit)
+    return db.scalars(stmt).all()
+
+
+@router.get("/assignable", response_model=list[UserOut])
+def list_assignable(
+    db: Annotated[Session, Depends(get_db)],
+    me: CurrentUser,
+    search: str | None = None,
+    limit: int = Query(100, ge=1, le=200),
+):
+    """Lightweight list of active users a project_manager or admin can pick from
+    when adding assignees. Engineers and viewers cannot call this (would just see
+    themselves anyway).
+    """
+    if me.role not in (UserRole.admin, UserRole.project_manager):
+        raise HTTPException(403, "Only admins and project managers can list assignable users.")
+    stmt = select(User).where(User.is_active.is_(True))
+    if search:
+        like = f"%{search}%"
+        stmt = stmt.where((User.full_name.ilike(like)) | (User.email.ilike(like)))
+    stmt = stmt.order_by(User.full_name).limit(limit)
     return db.scalars(stmt).all()
 
 

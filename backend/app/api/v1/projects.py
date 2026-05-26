@@ -37,10 +37,20 @@ def _user_can_access(db: Session, project: Project, user: User) -> bool:
 
 
 def _user_can_manage_team(db: Session, project: Project, user: User) -> bool:
-    """Owners (creator) and admins can add/remove assignees."""
+    """Who can add/remove assignees on a project:
+      - admins (always)
+      - project owner (creator)
+      - any project_manager who is themselves an assignee of this project
+
+    Engineers and viewers cannot mutate the team.
+    """
     if user.role == UserRole.admin:
         return True
-    return project.created_by == user.id
+    if project.created_by == user.id:
+        return True
+    if user.role == UserRole.project_manager and user_can_access(db, project.id, user):
+        return True
+    return False
 
 
 @router.get("", response_model=list[ProjectOut])
@@ -296,7 +306,7 @@ def add_assignee(
     if not p:
         raise HTTPException(404, "Project not found")
     if not _user_can_manage_team(db, p, user):
-        raise HTTPException(403, "Only the project owner or an admin can manage the team.")
+        raise HTTPException(403, "Only the project owner, an admin, or an assigned project manager can manage the team.")
     target = db.get(User, payload.user_id)
     if target is None or not target.is_active:
         raise HTTPException(404, "User not found or inactive")
@@ -333,7 +343,7 @@ def remove_assignee(
     if not p:
         raise HTTPException(404, "Project not found")
     if not _user_can_manage_team(db, p, user):
-        raise HTTPException(403, "Only the project owner or an admin can manage the team.")
+        raise HTTPException(403, "Only the project owner, an admin, or an assigned project manager can manage the team.")
     if user_id == p.created_by:
         raise HTTPException(400, "Cannot remove the project owner.")
     a = db.scalar(

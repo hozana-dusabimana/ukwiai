@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { Coins, TrendingUp, Plus, Wallet, AlertTriangle, ArrowRight } from "lucide-react";
 import { api } from "../lib/api";
+import { useAuth } from "../auth/AuthContext";
+import { capabilitiesFor } from "../lib/roles";
 import { useToast } from "../ui/Toast";
 import { PageLoader, EmptyState, InlineError, StatCard, Modal } from "../ui/primitives";
 
@@ -77,6 +79,8 @@ interface AnalysisRow {
 
 export default function Financials({ defaultProjectId }: FinancialsProps) {
   const toast = useToast();
+  const { user } = useAuth();
+  const caps = capabilitiesFor(user?.role);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [projectId, setProjectId] = useState<number | null>(defaultProjectId ?? null);
   const [summary, setSummary] = useState<BudgetSummary | null>(null);
@@ -153,12 +157,14 @@ export default function Financials({ defaultProjectId }: FinancialsProps) {
               <option key={p.id} value={p.id}>{p.project_name} ({p.project_code})</option>
             ))}
           </select>
-          <button
-            onClick={() => setAddOpen(true)}
-            className="bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs uppercase tracking-wider py-2 px-4 rounded flex items-center gap-1.5"
-          >
-            <Plus className="w-4 h-4" /> Add Expense
-          </button>
+          {caps.canAddExpense && (
+            <button
+              onClick={() => setAddOpen(true)}
+              className="bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs uppercase tracking-wider py-2 px-4 rounded flex items-center gap-1.5"
+            >
+              <Plus className="w-4 h-4" /> Add Expense
+            </button>
+          )}
         </div>
       </header>
 

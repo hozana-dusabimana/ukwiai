@@ -11,6 +11,7 @@ import SiteLogs from "./components/SiteLogs";
 import Reports from "./components/Reports";
 import Settings from "./components/Settings";
 import ProjectsList from "./components/ProjectsList";
+import UsersAdmin from "./components/UsersAdmin";
 import LoginScreen from "./auth/LoginScreen";
 import RegisterScreen from "./auth/RegisterScreen";
 import Landing from "./auth/Landing";
@@ -149,6 +150,7 @@ export default function App() {
           {currentTab === "financials" && <Financials defaultProjectId={selectedProjectId} />}
           {currentTab === "site-logs" && <SiteLogs />}
           {currentTab === "reports" && <Reports />}
+          {currentTab === "users" && <UsersAdmin />}
           {currentTab === "settings" && <Settings />}
           {currentTab === "system-health" && <SystemHealth logs={logs} searchQuery={searchQuery} />}
         </main>

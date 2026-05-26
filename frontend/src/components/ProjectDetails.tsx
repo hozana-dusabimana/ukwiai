@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Brain, CheckCircle2, AlertTriangle, ArrowRight, Award, Upload, MapPin, Sparkles, Building, ImageIcon } from "lucide-react";
 import { api } from "../lib/api";
+import { useAuth } from "../auth/AuthContext";
+import { capabilitiesFor } from "../lib/roles";
 import { useToast } from "../ui/Toast";
 import { PageLoader, InlineError, EmptyState, Modal } from "../ui/primitives";
+import TeamPanel from "./TeamPanel";
 
 function backendStatusLabel(status: string): string {
   if (status === "completed") return "Complete";
@@ -29,6 +32,7 @@ interface Project {
   start_date?: string;
   expected_end_date?: string;
   court_type?: string;
+  created_by?: number;
 }
 interface TimelineRow {
   stage_order: number;
@@ -79,6 +83,8 @@ interface ProjectDetailsProps {
 
 export default function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const toast = useToast();
+  const { user } = useAuth();
+  const caps = capabilitiesFor(user?.role);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [timeline, setTimeline] = useState<TimelineRow[]>([]);
   const [history, setHistory] = useState<AnalysisRow[]>([]);
@@ -152,9 +158,11 @@ export default function ProjectDetails({ projectId }: ProjectDetailsProps) {
             }`}>{p.status.replace(/_/g, " ")}</span>
           </div>
         </div>
-        <button onClick={() => setUploadOpen(true)} className="bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs uppercase tracking-wider py-2 px-4 rounded flex items-center gap-1.5 self-start md:self-auto">
-          <Upload className="w-4 h-4" /> Upload site image
-        </button>
+        {caps.canUploadImage && (
+          <button onClick={() => setUploadOpen(true)} className="bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs uppercase tracking-wider py-2 px-4 rounded flex items-center gap-1.5 self-start md:self-auto">
+            <Upload className="w-4 h-4" /> Upload site image
+          </button>
+        )}
       </header>
 
       <div className="grid grid-cols-12 gap-8">
@@ -323,6 +331,8 @@ export default function ProjectDetails({ projectId }: ProjectDetailsProps) {
               Spent {fmtRwf(totalSpent)} of {fmtRwf(totalBudget)} ({totalBudget > 0 ? ((totalSpent / totalBudget) * 100).toFixed(1) : "0"}% consumed).
             </p>
           </section>
+
+          <TeamPanel projectId={projectId} ownerId={p.created_by} />
         </div>
       </div>
 
