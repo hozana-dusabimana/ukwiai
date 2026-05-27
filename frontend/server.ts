@@ -10,6 +10,9 @@ const PORT = Number(process.env.PORT || 3000);
 
 app.use(express.json({ limit: "30mb" }));
 app.use(express.urlencoded({ extended: true, limit: "30mb" }));
+// Capture multipart bodies (file uploads) as a raw Buffer so we can forward
+// them to the backend untouched, boundary and all. express has no multipart parser.
+app.use(express.raw({ type: "multipart/form-data", limit: "30mb" }));
 
 const BACKEND_URL = (process.env.BACKEND_URL || "http://localhost:8000").replace(/\/$/, "");
 const BACKEND_PUBLIC_URL = (process.env.BACKEND_PUBLIC_URL || "http://localhost:8000").replace(/\/$/, "");
@@ -307,7 +310,12 @@ PROXY_METHODS.forEach((method) => {
       const hasBody = !["GET", "DELETE", "HEAD"].includes(init.method!);
 
       if (hasBody) {
-        if (contentType.includes("application/json")) {
+        if (contentType.includes("multipart/form-data")) {
+          // express.raw gave us the body as a Buffer; forward it verbatim with the
+          // original Content-Type so the multipart boundary stays intact.
+          headers["Content-Type"] = contentType;
+          init.body = Buffer.isBuffer(req.body) ? req.body : undefined;
+        } else if (contentType.includes("application/json")) {
           headers["Content-Type"] = "application/json";
           init.body = JSON.stringify(req.body || {});
         } else if (contentType.includes("application/x-www-form-urlencoded")) {

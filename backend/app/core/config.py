@@ -24,6 +24,9 @@ class Settings(BaseSettings):
 
     # AI service
     AI_SERVICE_URL: str = "http://ai_service:8001"
+    # OWLv2 inference runs on CPU (~20s/image) and the model loads lazily on
+    # cold start, so the client needs a generous timeout to avoid spurious 503s.
+    AI_SERVICE_TIMEOUT: float = 120.0
 
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost"

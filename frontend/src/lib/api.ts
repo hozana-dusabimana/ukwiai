@@ -42,14 +42,46 @@ export class ApiError extends Error {
   }
 }
 
+// Turn a Pydantic/FastAPI loc array (e.g. ["body", "court_type"]) into a
+// human label like "Court type". Skips the request-part prefix.
+function fieldLabel(loc: unknown): string | null {
+  if (!Array.isArray(loc)) return null;
+  const parts = loc.filter(
+    (p) => typeof p === "string" && !["body", "query", "path", "form", "header"].includes(p)
+  ) as string[];
+  const field = parts[parts.length - 1];
+  if (!field) return null;
+  const words = field
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+// FastAPI returns 422 validation errors as { detail: [{ loc, msg, type }, ...] }.
+// Render them as readable sentences instead of dumping raw JSON.
+function formatValidationErrors(detail: any[]): string {
+  const messages = detail.map((item) => {
+    const label = fieldLabel(item?.loc);
+    const msg = typeof item?.msg === "string" ? item.msg : "is invalid";
+    if (item?.type === "missing") return label ? `${label} is required` : "A required field is missing";
+    if (!label) return msg.charAt(0).toUpperCase() + msg.slice(1);
+    // Pydantic messages read as "Input should be ...". Prefix with the field name.
+    return `${label}: ${msg.replace(/^Input should be/i, "must be")}`;
+  });
+  return Array.from(new Set(messages)).join(". ") + ".";
+}
+
 async function parseError(res: Response): Promise<string> {
   const ct = res.headers.get("content-type") || "";
   if (ct.includes("application/json")) {
     try {
       const body = await res.json();
       if (typeof body?.detail === "string") return body.detail;
+      if (Array.isArray(body?.detail) && body.detail.length > 0) return formatValidationErrors(body.detail);
       if (typeof body?.error === "string") return body.error;
-      return JSON.stringify(body);
+      if (typeof body?.message === "string") return body.message;
+      return res.statusText || "Request failed";
     } catch {
       return res.statusText;
     }

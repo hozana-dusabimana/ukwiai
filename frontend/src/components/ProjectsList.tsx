@@ -144,7 +144,7 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
     project_code: "",
     location: "",
     client_name: "",
-    court_type: "full_court",
+    court_type: "outdoor",
     total_budget: "",
     start_date: new Date().toISOString().slice(0, 10),
     expected_end_date: "",
@@ -156,7 +156,7 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
   const reset = () => {
     setForm({
       project_name: "", project_code: "", location: "", client_name: "",
-      court_type: "full_court", total_budget: "",
+      court_type: "outdoor", total_budget: "",
       start_date: new Date().toISOString().slice(0, 10),
       expected_end_date: "", description: "",
     });
@@ -207,10 +207,8 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
       <Field label="Client"><input value={form.client_name} onChange={(e) => setForm((f) => ({ ...f, client_name: e.target.value }))} className="w-full bg-transparent outline-none text-sm" placeholder="City of Kigali" /></Field>
       <Field label="Court type">
         <select value={form.court_type} onChange={(e) => setForm((f) => ({ ...f, court_type: e.target.value }))} className="w-full bg-transparent outline-none text-sm">
-          <option value="full_court">Full court</option>
-          <option value="half_court">Half court</option>
-          <option value="indoor">Indoor</option>
           <option value="outdoor">Outdoor</option>
+          <option value="indoor">Indoor</option>
         </select>
       </Field>
       <Field label="Total budget (RWF)"><input type="number" min="0" value={form.total_budget} onChange={(e) => setForm((f) => ({ ...f, total_budget: e.target.value }))} className="w-full bg-transparent outline-none text-sm" placeholder="42500000" /></Field>
