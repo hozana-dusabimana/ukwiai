@@ -1,5 +1,8 @@
 FROM node:20-alpine AS build
 WORKDIR /app
+# Cap V8 heap so `vite build` doesn't OOM on the small (~1.8 GB) shared host
+# and disturb co-tenants. The SPA is small; 1 GB is ample headroom.
+ENV NODE_OPTIONS=--max-old-space-size=1024
 
 COPY package.json ./
 RUN npm install --no-audit --no-fund --legacy-peer-deps
