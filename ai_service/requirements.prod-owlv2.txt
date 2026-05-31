@@ -30,3 +30,7 @@ Pillow==10.4.0
 torch==2.4.1
 transformers==4.45.2
 accelerate==0.34.2
+# OWLv2's image processor (post_process_object_detection) needs scipy at
+# runtime. The full requirements.txt pulls it transitively via scikit-learn;
+# this lean set must list it explicitly or detection raises and returns nothing.
+scipy==1.13.1
