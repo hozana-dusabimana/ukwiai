@@ -17,8 +17,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir --default-timeout=300 --retries 10 -r requirements.txt
+# REQUIREMENTS selects the dependency set. Default = full (CNN + OWLv2), used by
+# dev and CI on x86. Production on the ARM64 box passes requirements.prod.txt
+# (heuristic-only), which omits tensorflow/torch (no aarch64 wheels, unused at
+# runtime when AI_FORCE_HEURISTIC + AI_DISABLE_OBJDET are set).
+ARG REQUIREMENTS=requirements.txt
+COPY requirements*.txt ./
+RUN pip install --no-cache-dir --default-timeout=300 --retries 10 -r ${REQUIREMENTS}
 
 COPY . .
 

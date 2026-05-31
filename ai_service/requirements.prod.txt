@@ -1,0 +1,19 @@
+# Lean production requirements for the AI service (heuristic-only mode:
+# AI_FORCE_HEURISTIC=1 + AI_DISABLE_OBJDET=1).
+#
+# Excludes tensorflow / torch / transformers / accelerate / kaggle on purpose:
+#  * tensorflow-cpu has NO aarch64 wheel (the box is ARM64), so the full
+#    requirements.txt cannot even build here.
+#  * In heuristic-only mode none of those are imported at runtime — TensorFlow
+#    is loaded lazily only when a trained CNN is used, and torch/OWLv2 only when
+#    object detection is enabled. Both are disabled in prod.
+# To run the full CNN + OWLv2 stack (on a larger, ideally x86 box), build with
+# the default requirements.txt instead and flip the two AI_* flags off.
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.10
+pydantic==2.9.2
+
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+Pillow==10.4.0

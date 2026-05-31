@@ -19,6 +19,9 @@ services:
     build:
       context: ./ai_service
       dockerfile: Dockerfile
+      args:
+        # Heuristic-only deps; the full set's tensorflow-cpu has no aarch64 wheel.
+        REQUIREMENTS: requirements.prod.txt
     image: ukwi_ai_service:prod
     container_name: ukwi_ai_service
     restart: unless-stopped
