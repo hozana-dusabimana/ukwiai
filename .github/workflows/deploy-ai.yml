@@ -35,6 +35,23 @@ jobs:
           git fetch --prune --force origin main || { git remote prune origin || true; git fetch --force origin main; }
           git reset --hard FETCH_HEAD
           git --no-pager log --oneline -1
+
+          # Auto-enable OWLv2 only when the host actually has the RAM for it.
+          # OWLv2 (torch + ~600 MB model) needs the AI container at ~2 GB; this
+          # box is network_mode:host and shared with MySQL/backend/frontend, so
+          # on a smaller box we MUST stay heuristic-only or risk OOM-ing prod.
+          # Exported shell vars override the .env.prod defaults for compose.
+          AVAIL_MB=$(free -m | awk '/^Mem:/ {print $7}')
+          echo "Available memory: ${AVAIL_MB:-unknown} MB"
+          if [ "${AVAIL_MB:-0}" -ge 2200 ]; then
+            echo "Sufficient RAM -> enabling OWLv2 (torch + transformers)."
+            export AI_REQUIREMENTS=requirements.prod-owlv2.txt
+            export AI_MEM_LIMIT=2g
+            export AI_DISABLE_OBJDET=0
+          else
+            echo "Insufficient RAM (need >=2200 MB available) -> staying heuristic-only."
+          fi
+
           docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build ai_service
           docker image prune -f
           REMOTE
