@@ -580,9 +580,23 @@ class Predictor:
         evidence_count = int(sum(1 for flag in court_evidence if flag))
         if det["total_detections"] >= 1:
             evidence_count += 1
-        is_relevant = evidence_count >= _MIN_COURT_EVIDENCE
-        # Score in [0, 1] purely for transparency in the response / audit log.
-        relevance_score = min(1.0, evidence_count / 3.0)
+
+        # Two relevance regimes:
+        #  * OWLv2 ACTIVE  -> strong, reliable gate. We trust the detector: the
+        #    photo must contain a basketball/court/construction object, or show
+        #    unambiguous painted court lines (which the detector can miss). This
+        #    is what actually rejects faces, food, rooms, etc.
+        #  * OWLv2 DISABLED (RAM-frugal prod) -> the pixel heuristic alone cannot
+        #    tell a smooth painted court from skin/sky/walls, so we stay lenient
+        #    (any surface-evidence flag passes) to avoid wrongly rejecting a real
+        #    site photo. The confirm-before-analysis dialog is the safeguard here.
+        if det.get("objdet_active"):
+            is_relevant = det.get("court_scene_count", 0) >= 1 or has_court_lines
+            relevance_score = 1.0 if is_relevant else 0.0
+        else:
+            is_relevant = evidence_count >= _MIN_COURT_EVIDENCE
+            # Score in [0, 1] purely for transparency in the response / audit log.
+            relevance_score = min(1.0, evidence_count / 3.0)
 
         # ----- per-stage scores -----
         # IMPORTANT: only penalize stages 1-3 by the *confirmed* painted signal.

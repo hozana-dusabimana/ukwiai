@@ -24,11 +24,22 @@ _PIPELINE: Any | None = None
 _PIPELINE_LOAD_ATTEMPTED = False
 
 # Text prompts. Wording matters for zero-shot — short concrete nouns work best.
+# The first three drive Stage 6/7 scoring (see predictor); the rest are broad
+# "is this a court/construction scene at all" prompts used only by the relevance
+# gate, so an early-stage site (bare ground, gravel, slab) with no hoop yet can
+# still register as a genuine basketball-court photo.
 _PROMPTS = [
     "basketball backboard",
     "chain-link fence",
     "basketball pole",
+    "basketball hoop",
+    "basketball court",
+    "outdoor sports court",
+    "concrete pavement",
+    "construction site",
 ]
+# Labels the stage-scoring rules read by name — kept stable as prompts grow.
+_STAGE_LABELS = ("basketball backboard", "chain-link fence", "basketball pole")
 # Threshold tuned for precision on real construction photos. OWLv2 returns
 # many low-confidence boxes; 0.20 is a reasonable balance.
 _SCORE_THRESHOLD = float(os.environ.get("AI_OBJDET_THRESHOLD", "0.20"))
@@ -77,6 +88,15 @@ def _load_pipeline() -> Any | None:
             logger.warning("OWLv2 unavailable — falling back to heuristic only. (%s)", exc)
             _PIPELINE = None
         return _PIPELINE
+
+
+def objdet_active() -> bool:
+    """True only when the OWLv2 pipeline has actually loaded. The relevance gate
+    uses this to decide whether it can trust "no detection" as a real signal
+    (model present, saw nothing) versus a disabled detector (saw nothing because
+    it never ran). A load attempt must have happened first (e.g. via
+    detect_court_structures) for this to be meaningful."""
+    return _PIPELINE is not None
 
 
 def detect_court_structures(
@@ -141,5 +161,9 @@ def summarize_detections(detections: list[Detection]) -> dict[str, Any]:
         "backboard_score": round(best_score.get("basketball backboard", 0.0), 3),
         "fence_score": round(best_score.get("chain-link fence", 0.0), 3),
         "pole_score": round(best_score.get("basketball pole", 0.0), 3),
+        # Any detection across our basketball/court/construction prompts is
+        # positive evidence that the photo really is a court scene.
+        "court_scene_count": len(detections),
+        "objdet_active": objdet_active(),
         "total_detections": len(detections),
     }
