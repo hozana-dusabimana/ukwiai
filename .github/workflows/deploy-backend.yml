@@ -1,0 +1,51 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "docker-compose.prod.yml"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+env:
+  EC2_HOST: 98.83.16.194
+  EC2_USER: ubuntu
+  PROJECT_DIR: ~/ukwiai
+  HEALTH_URL: https://api-ukwiai.isiri.rw/api/system/health
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync repo and rebuild backend on the server
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            "$EC2_USER@$EC2_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd ~/ukwiai
+          # Resilient sync — a stale/locked remote ref breaks a naive fetch.
+          git fetch --prune --force origin main || { git remote prune origin || true; git fetch --force origin main; }
+          git reset --hard FETCH_HEAD
+          git --no-pager log --oneline -1
+          docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build backend
+          docker image prune -f
+          REMOTE
+
+      - name: Health-check the public API domain
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$HEALTH_URL" || echo 000)
+            echo "attempt $i: $HEALTH_URL -> $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 6
+          done
+          echo "Backend health check failed"; exit 1

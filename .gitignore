@@ -1,7 +1,13 @@
 # Env
 .env
 .env.local
+.env.prod
 *.env.production
+
+# Secrets / keys (never commit)
+*.pem
+*.key
+private-key.md
 
 # Python
 __pycache__/
@@ -55,3 +61,5 @@ backend/storage/reports/*
 
 # OS
 Thumbs.db
+
+private-key.md

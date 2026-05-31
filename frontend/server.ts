@@ -7,6 +7,10 @@ dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+// Bind address. In production behind CloudPanel's reverse proxy we bind the
+// loopback only (HOST=127.0.0.1) so the port is never exposed publicly; dev
+// keeps 0.0.0.0 for convenience.
+const HOST = process.env.HOST || "0.0.0.0";
 
 app.use(express.json({ limit: "30mb" }));
 app.use(express.urlencoded({ extended: true, limit: "30mb" }));
@@ -370,8 +374,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[UKWI Monitor Frontend] listening on http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`[UKWI Monitor Frontend] listening on http://${HOST}:${PORT}`);
     console.log(`[UKWI Monitor Frontend] proxying API -> ${BACKEND_URL}`);
   });
 }

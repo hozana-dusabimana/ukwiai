@@ -1,0 +1,50 @@
+name: Deploy Frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "docker-compose.prod.yml"
+      - ".github/workflows/deploy-frontend.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-frontend
+  cancel-in-progress: false
+
+env:
+  EC2_HOST: 98.83.16.194
+  EC2_USER: ubuntu
+  PROJECT_DIR: ~/ukwiai
+  HEALTH_URL: https://ukwiai.isiri.rw/
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync repo and rebuild frontend on the server
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            "$EC2_USER@$EC2_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd ~/ukwiai
+          git fetch --prune --force origin main || { git remote prune origin || true; git fetch --force origin main; }
+          git reset --hard FETCH_HEAD
+          git --no-pager log --oneline -1
+          docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build frontend
+          docker image prune -f
+          REMOTE
+
+      - name: Health-check the public app domain
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$HEALTH_URL" || echo 000)
+            echo "attempt $i: $HEALTH_URL -> $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 6
+          done
+          echo "Frontend health check failed"; exit 1

@@ -51,6 +51,14 @@ def _load_pipeline() -> Any | None:
         if _PIPELINE is not None or _PIPELINE_LOAD_ATTEMPTED:
             return _PIPELINE
         _PIPELINE_LOAD_ATTEMPTED = True
+        # AI_DISABLE_OBJDET=1 skips loading torch/OWLv2 entirely. On small
+        # (RAM-constrained) hosts the ~600 MB model + torch runtime can exhaust
+        # memory and disrupt co-tenants, so production runs heuristic-only by
+        # default. Flip this off on a larger instance to re-enable detection.
+        if os.environ.get("AI_DISABLE_OBJDET", "").strip().lower() in ("1", "true", "yes"):
+            logger.info("AI_DISABLE_OBJDET set — skipping OWLv2, heuristic-only.")
+            _PIPELINE = None
+            return _PIPELINE
         try:
             # Local imports keep the FastAPI cold-start fast when detection
             # is disabled or torch is missing.
