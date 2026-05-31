@@ -91,6 +91,10 @@ export default function AnalysisWorkspace({
   }, [selectedProjectId]);
 
   const [dragOver, setDragOver] = useState(false);
+  // Image staged for analysis, awaiting explicit user confirmation. Both the
+  // webcam capture and the local-upload paths funnel through this so analysis
+  // never starts until the user reviews the preview and clicks "Confirm".
+  const [pendingUpload, setPendingUpload] = useState<{ dataUrl: string; name: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const progressAnimRef = useRef<number | null>(null);
 
@@ -169,8 +173,19 @@ export default function AnalysisWorkspace({
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-    await triggerAnalysis(dataUrl, `webcam-${stamp}`);
+    // Stage the captured frame and let the user confirm before we analyse it.
+    setPendingUpload({ dataUrl, name: `webcam-${stamp}` });
   };
+
+  // Run analysis on the staged image once the user confirms.
+  const confirmAnalysis = () => {
+    if (!pendingUpload) return;
+    const { dataUrl, name } = pendingUpload;
+    setPendingUpload(null);
+    triggerAnalysis(dataUrl, name);
+  };
+
+  const cancelAnalysis = () => setPendingUpload(null);
 
   // Handle API post trigger
   const triggerAnalysis = async (base64Image: string, customName?: string) => {
@@ -190,8 +205,24 @@ export default function AnalysisWorkspace({
       });
 
       if (!response.ok) {
-        const detail = await response.text().catch(() => "");
-        throw new Error(`Analysis failed: ${detail || response.statusText}`);
+        let message = response.statusText;
+        try {
+          const body = await response.json();
+          message = body.error || body.detail || message;
+        } catch {
+          message = (await response.text().catch(() => "")) || message;
+        }
+        // 422 = not a basketball court, 409 = stage already completed. These are
+        // expected, user-facing outcomes — show the friendly message as an info
+        // notice and reset to idle rather than treating it as a hard error.
+        if (response.status === 422 || response.status === 409) {
+          setRunning(false);
+          setAppState('READY FOR INPUT');
+          setActiveStage("Ready for input");
+          toast.info(message);
+          return;
+        }
+        throw new Error(`Analysis failed: ${message}`);
       }
 
       const data = await response.json();
@@ -224,13 +255,20 @@ export default function AnalysisWorkspace({
     if (file) {
       processSelectedFile(file);
     }
+    // Reset so picking the same file again (e.g. after cancelling) still fires.
+    e.target.value = "";
   };
 
   const processSelectedFile = (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please choose an image file (JPG, PNG or WEBP).");
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       const base64 = reader.result as string;
-      triggerAnalysis(base64, file.name.replace(/\.[^/.]+$/, ""));
+      // Stage the file and wait for confirmation instead of analysing instantly.
+      setPendingUpload({ dataUrl: base64, name: file.name.replace(/\.[^/.]+$/, "") });
     };
     reader.readAsDataURL(file);
   };
@@ -259,6 +297,48 @@ export default function AnalysisWorkspace({
 
   return (
     <div className="space-y-8 select-none">
+      {/* Confirm-before-analysis dialog */}
+      {pendingUpload && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full overflow-hidden">
+            <div className="bg-slate-900 text-white px-6 py-4 flex items-center gap-2">
+              <ShieldCheck className="w-5 h-5 text-orange-500" />
+              <span className="font-sans font-bold text-sm uppercase tracking-wider">Confirm AI Analysis</span>
+            </div>
+            <div className="p-6">
+              <div className="rounded border border-gray-200 overflow-hidden bg-gray-50 mb-4">
+                <img src={pendingUpload.dataUrl} alt="Image to analyse" className="w-full h-48 object-cover" />
+              </div>
+              <p className="text-sm text-slate-700 leading-relaxed mb-1">
+                Start AI progress analysis on this image?
+              </p>
+              <p className="text-xs text-gray-500 leading-relaxed mb-6">
+                Make sure it's a clear photo of the basketball court site. The AI will reject images
+                that aren't a playground or that show a stage already completed.
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={cancelAnalysis}
+                  className="px-4 py-2 border border-gray-300 text-slate-700 font-bold text-xs uppercase tracking-wider rounded hover:bg-gray-100 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmAnalysis}
+                  className="px-5 py-2 bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs uppercase tracking-wider rounded transition-all flex items-center gap-1.5 shadow-md"
+                >
+                  <CheckCircle2 className="w-4 h-4" /> Confirm &amp; Analyse
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
         <div>
           <nav className="flex text-gray-400 text-[10px] font-bold uppercase tracking-widest gap-2 items-center mb-1">

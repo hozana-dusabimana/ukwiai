@@ -29,6 +29,13 @@ _LOCK = threading.Lock()
 # barely-better-than-random checkpoints don't slip through.
 _MIN_ACCEPTABLE_VAL_ACC = max(1.0 / NUM_CLASSES, 0.20)
 
+# Relevance gate: how many independent construction-surface / court-structure
+# signals must fire before we accept a photo as a genuine basketball-court site.
+# "Balanced" policy — a single tuned evidence flag (or one OWLv2 detection) is
+# enough, so a real but poorly-lit site photo is rarely rejected, while photos
+# of people, food, documents or animals trip none of the flags and get blocked.
+_MIN_COURT_EVIDENCE = 1
+
 
 _STAGE_ADVICE = {
     1: "Confirm dimensions match the project plan before sub-base material is delivered.",
@@ -193,8 +200,12 @@ class Predictor:
             stage = stage_for_index(cls_idx)
             progress = max(stage.progress_lo, min(stage.progress_hi, progress_pred))
             raw = {f"stage_{i+1}": float(p) for i, p in enumerate(stage_probs)}
+            # The CNN has no scene-level relevance head, so we can't extract the
+            # surface-evidence flags the heuristic uses. Trust its classification
+            # here; the heuristic path below carries the real relevance gate.
+            is_relevant, relevance_score = True, float(min(1.0, confidence))
         else:
-            stage, progress, confidence, raw = self._heuristic(image_bytes)
+            stage, progress, confidence, raw, is_relevant, relevance_score = self._heuristic(image_bytes)
 
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
@@ -208,6 +219,8 @@ class Predictor:
             "predicted_progress": round(progress, 2),
             "confidence": round(confidence, 4),
             "confidence_label": _confidence_label(confidence),
+            "is_basketball_court": bool(is_relevant),
+            "relevance_score": round(float(relevance_score), 3),
             "summary": summary,
             "advice": advice,
             "next_stage": next_stage.name if next_stage else None,
@@ -547,6 +560,30 @@ class Predictor:
             or (has_painted_court and has_court_lines and (metal > 0.04 or pole_count >= 2))
         )
 
+        # ----- basketball-court relevance gate -----
+        # The heuristic only has genuine evidence of a construction stage when at
+        # least one of its tuned surface/structure flags fires (or OWLv2 actually
+        # sees a court structure). A photo of a person, animal, document, meal,
+        # etc. trips none of these — so "no positive evidence" is our signal that
+        # the image is NOT a basketball playground, and we flag it for rejection
+        # instead of forcing a meaningless stage guess via the softmax below.
+        court_evidence = [
+            has_soil_dominant,
+            has_gravel_surface,
+            has_concrete_slab,
+            has_asphalt_surface,
+            has_painted_court,
+            has_court_lines,
+            has_hoop_signal,
+            has_fence_pattern,
+        ]
+        evidence_count = int(sum(1 for flag in court_evidence if flag))
+        if det["total_detections"] >= 1:
+            evidence_count += 1
+        is_relevant = evidence_count >= _MIN_COURT_EVIDENCE
+        # Score in [0, 1] purely for transparency in the response / audit log.
+        relevance_score = min(1.0, evidence_count / 3.0)
+
         # ----- per-stage scores -----
         # IMPORTANT: only penalize stages 1-3 by the *confirmed* painted signal.
         # The raw `painted` ratio fires high on hi-viz vests + warm sandy ground;
@@ -707,9 +744,12 @@ class Predictor:
             "has_hoop_signal": bool(has_hoop_signal),
             "has_backboard": bool(has_backboard),
             "has_pole_array": bool(has_pole_array),
+            "evidence_count": int(evidence_count),
+            "is_relevant": bool(is_relevant),
+            "relevance_score": round(float(relevance_score), 3),
             "owlv2": det,
         }
-        return stage, progress, confidence, raw
+        return stage, progress, confidence, raw, is_relevant, relevance_score
 
 
 _predictor: Predictor | None = None

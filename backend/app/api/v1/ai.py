@@ -12,11 +12,16 @@ from app.core.deps import CurrentUser, require_admin, require_engineer_plus
 from app.models.image import SiteImage
 from app.models.project import Project
 from app.models.analysis import ProgressAnalysis
+from app.models.stage import ProjectStageStatus
 from app.models.user import User
 from app.schemas.analysis import ProgressAnalysisOut, AnalyzeResponse
 from app.schemas.cost import CostEstimationOut
 from app.services.ai_client import ai_client, AIServiceError
-from app.services.cost_estimation import compute_cost_estimation, apply_ai_inferred_progress
+from app.services.cost_estimation import (
+    compute_cost_estimation,
+    apply_ai_inferred_progress,
+    find_project_stage,
+)
 from app.services.alerts import evaluate_cost_alerts
 from app.services.audit import log_action
 from app.services.access import user_can_access
@@ -48,6 +53,10 @@ async def analyze_image(
     if image_id is None and file is None:
         raise HTTPException(400, "Provide either image_id or a file upload")
 
+    # Resolve the project and raw image bytes WITHOUT persisting a fresh upload
+    # yet. We run the relevance + completed-stage guards on the AI result first,
+    # so a photo that isn't a basketball court (or targets a stage that is
+    # already finished) is rejected before anything is written to disk or the DB.
     image: SiteImage | None = None
     if image_id is not None:
         image = db.get(SiteImage, image_id)
@@ -67,21 +76,6 @@ async def analyze_image(
         if not user_can_access(db, project_id, user):
             raise HTTPException(403, "You are not assigned to this project.")
         img_bytes = await file.read()
-        try:
-            info = save_image_bytes(project_id, file.filename or "image.jpg", img_bytes)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc))
-        image = SiteImage(
-            project_id=project_id,
-            image_path=info["image_path"],
-            image_url=info["image_url"],
-            captured_date=datetime.now(),
-            uploaded_by=user.id,
-            file_size=info["file_size"],
-            original_filename=info["original_filename"],
-        )
-        db.add(image)
-        db.flush()
         filename = file.filename or "image.jpg"
 
     if proj is None:
@@ -93,6 +87,51 @@ async def analyze_image(
     except AIServiceError as exc:
         raise HTTPException(status_code=503, detail=f"AI service unavailable: {exc}")
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
+
+    # ----- Guard 1: the image must actually be a basketball playground. -----
+    # The AI service returns is_basketball_court=False when no construction
+    # surface / court structure evidence is present (e.g. a selfie, a document).
+    if ai_resp.get("is_basketball_court") is False:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "This photo doesn't look like a basketball court construction site. "
+                "Please upload a clear photo of the playground — the ground surface, "
+                "court, hoops or fencing — so the AI can analyse its progress."
+            ),
+        )
+
+    # ----- Guard 2: don't re-analyse a stage that is already completed. -----
+    predicted_stage_name = ai_resp.get("predicted_stage")
+    match = find_project_stage(db, proj.id, predicted_stage_name)
+    if match and match[0].status == ProjectStageStatus.completed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Good news — the “{match[1].stage_name}” stage is already "
+                "completed and signed off for this project, so there's no need to "
+                "analyse it again. Capture the stage that's currently in progress "
+                "to keep your timeline up to date."
+            ),
+        )
+
+    # ----- Guards passed: persist the upload (if this was a new file). -----
+    if image is None:
+        try:
+            info = save_image_bytes(proj.id, filename, img_bytes)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        image = SiteImage(
+            project_id=proj.id,
+            image_path=info["image_path"],
+            image_url=info["image_url"],
+            captured_date=datetime.now(),
+            uploaded_by=user.id,
+            file_size=info["file_size"],
+            original_filename=info["original_filename"],
+        )
+        db.add(image)
+        db.flush()
 
     analysis = ProgressAnalysis(
         image_id=image.id,

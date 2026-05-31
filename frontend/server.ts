@@ -228,7 +228,17 @@ app.post("/api/analyze", async (req, res) => {
     const ai = await callBackend(req, "/api/ai/analyze-image", { method: "POST", body: form });
     if (!ai.ok) {
       const text = await ai.text();
-      return res.status(ai.status).json({ error: `analyze-image ${ai.status}: ${text}` });
+      // FastAPI sends errors as {"detail": "..."} — surface that friendly message
+      // verbatim (e.g. "not a basketball court", "stage already completed") so the
+      // UI can show it to the user instead of a raw status dump.
+      let message = text;
+      try {
+        const parsed = JSON.parse(text);
+        message = parsed.detail || parsed.error || text;
+      } catch {
+        /* non-JSON body: fall back to the raw text */
+      }
+      return res.status(ai.status).json({ error: message });
     }
     const analysis = await ai.json();
 

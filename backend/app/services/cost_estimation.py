@@ -96,6 +96,38 @@ def _normalize(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
 
 
+def find_project_stage(
+    db: Session,
+    project_id: int,
+    predicted_stage_name: str | None,
+) -> tuple[ProjectStage, ConstructionStage] | None:
+    """Resolve the AI-predicted stage name to this project's ProjectStage row.
+
+    Uses the same fuzzy name matching as `apply_ai_inferred_progress` (exact
+    normalized match first, then substring containment) so the two stay in sync.
+    Returns ``None`` when the project has no stages or no name matches.
+    """
+    if not predicted_stage_name:
+        return None
+    rows = db.execute(
+        select(ProjectStage, ConstructionStage)
+        .join(ConstructionStage, ProjectStage.stage_id == ConstructionStage.id)
+        .where(ProjectStage.project_id == project_id)
+        .order_by(ConstructionStage.stage_order)
+    ).all()
+    if not rows:
+        return None
+    pred = _normalize(predicted_stage_name)
+    exact = next(((ps, cs) for ps, cs in rows if _normalize(cs.stage_name) == pred), None)
+    if exact:
+        return exact
+    return next(
+        ((ps, cs) for ps, cs in rows
+         if pred in _normalize(cs.stage_name) or _normalize(cs.stage_name) in pred),
+        None,
+    )
+
+
 def apply_ai_inferred_progress(
     db: Session,
     project_id: int,
