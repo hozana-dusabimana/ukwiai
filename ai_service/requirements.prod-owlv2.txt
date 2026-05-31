@@ -1,0 +1,32 @@
+# Production requirements WITH OWLv2 zero-shot object detection enabled.
+#
+# Use this on a box that can give the AI container ~1.5-2 GB RAM. It adds
+# torch + transformers (for OWLv2 backboard / fence / court detection) so the
+# heuristic can reach stages 6-7 on finished courts, exactly like local dev.
+#
+# It deliberately STILL omits tensorflow: tensorflow-cpu has no aarch64 wheel,
+# and the trained CNN stays disabled (AI_FORCE_HEURISTIC=1). torch DOES ship
+# aarch64 CPU wheels, so OWLv2 builds and runs on the ARM64 box.
+#
+# To enable in prod, set in .env.prod:
+#     AI_REQUIREMENTS=requirements.prod-owlv2.txt
+#     AI_MEM_LIMIT=2g
+#     AI_DISABLE_OBJDET=0
+# then redeploy (rebuilds the ai_service image). Roll back by reverting those
+# three values. First analysis after enabling is slow (downloads the ~600 MB
+# OWLv2 model from Hugging Face once).
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.10
+pydantic==2.9.2
+
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+Pillow==10.4.0
+
+# Zero-shot object detection (OWLv2). CPU-only torch; aarch64 wheels exist on
+# PyPI, the cpu extra-index covers x86. transformers/accelerate are pure-Python.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1
+transformers==4.45.2
+accelerate==0.34.2

@@ -20,8 +20,10 @@ services:
       context: ./ai_service
       dockerfile: Dockerfile
       args:
-        # Heuristic-only deps; the full set's tensorflow-cpu has no aarch64 wheel.
-        REQUIREMENTS: requirements.prod.txt
+        # Default = heuristic-only deps (the full set's tensorflow-cpu has no
+        # aarch64 wheel). Set AI_REQUIREMENTS=requirements.prod-owlv2.txt in
+        # .env.prod to add torch+transformers and enable OWLv2 detection.
+        REQUIREMENTS: ${AI_REQUIREMENTS:-requirements.prod.txt}
     image: ukwi_ai_service:prod
     container_name: ukwi_ai_service
     restart: unless-stopped
@@ -39,7 +41,10 @@ services:
     volumes:
       - ./ai_service/models:/app/models
       - ukwi_uploads:/app/storage/uploads:ro
-    mem_limit: 900m
+    # Default 900m suits heuristic-only. Bump to ~2g (AI_MEM_LIMIT=2g) when
+    # enabling OWLv2 — and confirm the host actually has that RAM free first,
+    # since this container shares the box (network_mode: host) with the others.
+    mem_limit: ${AI_MEM_LIMIT:-900m}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${AI_PORT:-8004}/health"]
       interval: 30s
