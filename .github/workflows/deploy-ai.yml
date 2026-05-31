@@ -46,7 +46,7 @@ jobs:
           if [ "${AVAIL_MB:-0}" -ge 2200 ]; then
             echo "Sufficient RAM -> enabling OWLv2 (torch + transformers)."
             export AI_REQUIREMENTS=requirements.prod-owlv2.txt
-            export AI_MEM_LIMIT=2g
+            export AI_MEM_LIMIT=4g
             export AI_DISABLE_OBJDET=0
           else
             echo "Insufficient RAM (need >=2200 MB available) -> staying heuristic-only."
