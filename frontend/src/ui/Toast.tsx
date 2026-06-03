@@ -17,13 +17,29 @@ interface ToastApi {
 
 const Ctx = createContext<ToastApi | null>(null);
 
+// Success is a quick confirmation, so it auto-dismisses. Info/error carry
+// actionable, user-facing outcomes (e.g. "not a basketball court") and stay
+// on screen until the user closes them with the X.
+const AUTO_DISMISS_MS: Record<ToastKind, number | null> = {
+  success: 3000,
+  error: null,
+  info: null,
+};
+
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const dismiss = useCallback((id: string) => {
+    setToasts((all) => all.filter((x) => x.id !== id));
+  }, []);
 
   const push = useCallback((kind: ToastKind, message: string) => {
     const id = `${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
     setToasts((t) => [...t, { id, kind, message }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4500);
+    const ttl = AUTO_DISMISS_MS[kind];
+    if (ttl !== null) {
+      setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), ttl);
+    }
   }, []);
 
   const api: ToastApi = {
@@ -33,40 +49,59 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     info: (m) => push("info", m),
   };
 
+  const top = toasts[toasts.length - 1];
+
   return (
     <Ctx.Provider value={api}>
       {children}
-      <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 max-w-sm">
-        {toasts.map((t) => (
+      {top && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          {/* Backdrop — click to dismiss the current notification. */}
           <div
-            key={t.id}
-            className={`bg-white border-l-4 shadow-lg rounded p-4 flex items-start gap-3 ${
-              t.kind === "success"
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            onClick={() => dismiss(top.id)}
+            data-testid="toast-backdrop"
+          />
+
+          <div
+            key={top.id}
+            data-testid="toast-card"
+            data-kind={top.kind}
+            className={`relative w-full max-w-md bg-white border-t-4 shadow-2xl rounded-xl p-6 flex items-start gap-4 ${
+              top.kind === "success"
                 ? "border-emerald-500"
-                : t.kind === "error"
+                : top.kind === "error"
                 ? "border-red-500"
                 : "border-sky-500"
             }`}
           >
-            <div className="mt-0.5">
-              {t.kind === "success" ? (
-                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-              ) : t.kind === "error" ? (
-                <AlertTriangle className="w-5 h-5 text-red-500" />
+            <div className="mt-0.5 shrink-0">
+              {top.kind === "success" ? (
+                <CheckCircle2 className="w-7 h-7 text-emerald-500" />
+              ) : top.kind === "error" ? (
+                <AlertTriangle className="w-7 h-7 text-red-500" />
               ) : (
-                <Info className="w-5 h-5 text-sky-500" />
+                <Info className="w-7 h-7 text-sky-500" />
               )}
             </div>
-            <div className="flex-1 text-xs text-slate-900 leading-relaxed">{t.message}</div>
+            <div className="flex-1 text-sm text-slate-900 leading-relaxed pt-0.5">
+              {top.message}
+            </div>
             <button
-              onClick={() => setToasts((all) => all.filter((x) => x.id !== t.id))}
-              className="text-gray-400 hover:text-slate-900"
+              onClick={() => dismiss(top.id)}
+              aria-label="Close notification"
+              data-testid="toast-close"
+              className="shrink-0 text-gray-400 hover:text-slate-900 transition-colors"
             >
-              <X className="w-4 h-4" />
+              <X className="w-5 h-5" />
             </button>
           </div>
-        ))}
-      </div>
+        </div>
+      )}
     </Ctx.Provider>
   );
 }
