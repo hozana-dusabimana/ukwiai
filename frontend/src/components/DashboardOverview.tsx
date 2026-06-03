@@ -15,8 +15,12 @@ export default function DashboardOverview({ scans, overview, onNavigateToTab, on
   const activeProjectName = overview?.activeProject?.name || "No active project";
   const activeProjectLocation = overview?.activeProject?.location || "Awaiting first project";
   const totals = overview?.totals;
-  const totalScans = scans.length;
-  const recentScan = scans[0];
+  // Scope scans to the active project so the count and "most recent scan"
+  // track the header switcher alongside the (server-scoped) totals.
+  const activeId = overview?.activeProject?.id ?? null;
+  const projectScans = activeId != null ? scans.filter((s) => s.projectId === activeId) : scans;
+  const totalScans = projectScans.length;
+  const recentScan = projectScans[0];
   const projectsList = overview?.projects || [];
 
   return (
@@ -37,7 +41,7 @@ export default function DashboardOverview({ scans, overview, onNavigateToTab, on
           icon={<Cpu className="w-5 h-5" />}
           label="AI inference scans"
           value={`${totalScans}`}
-          subtitle={totals ? `${totals.totalProjects} project${totals.totalProjects === 1 ? "" : "s"} tracked` : "Awaiting data"}
+          subtitle={activeId != null ? `In ${activeProjectName}` : (totals ? `${totals.totalProjects} project${totals.totalProjects === 1 ? "" : "s"} tracked` : "Awaiting data")}
           accent="orange"
         />
         <StatCard

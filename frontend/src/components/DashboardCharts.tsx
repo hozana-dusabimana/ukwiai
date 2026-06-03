@@ -12,9 +12,10 @@ export default function DashboardCharts({ projectId }: { projectId?: number | nu
 
   useEffect(() => {
     const q = projectId ? `?project_id=${projectId}&days=30` : "?days=30";
+    const stageQ = projectId ? `?project_id=${projectId}` : "";
     api<Point[]>(`/api/dashboard/charts/progress-trend${q}`).then(setProgress).catch(() => setProgress([]));
     api<Point[]>(`/api/dashboard/charts/cost-trend${q}`).then(setCost).catch(() => setCost([]));
-    api<StagePoint[]>(`/api/dashboard/charts/stage-distribution`).then(setStages).catch(() => setStages([]));
+    api<StagePoint[]>(`/api/dashboard/charts/stage-distribution${stageQ}`).then(setStages).catch(() => setStages([]));
   }, [projectId]);
 
   return (

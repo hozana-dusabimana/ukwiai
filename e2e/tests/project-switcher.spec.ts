@@ -35,4 +35,9 @@ test("header project switcher changes the active project", async ({ page }) => {
   await expect(menu).toHaveCount(0);
   await expect(switcher).toContainText(targetName);
   expect((await switcher.innerText()).trim()).not.toBe(before);
+
+  // The dashboard re-scopes to the chosen project: the AI-inference-scans
+  // card subtitle reflects the active project name.
+  const escaped = targetName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  await expect(page.getByText(new RegExp(`In\\s+${escaped}`, "i")).first()).toBeVisible();
 });

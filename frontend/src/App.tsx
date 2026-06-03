@@ -33,19 +33,25 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [unreadAlerts, setUnreadAlerts] = useState<number>(0);
 
+  // Overview is fetched on its own so it can be re-scoped whenever the active
+  // project changes, without re-pulling scans/logs. Passing project_id scopes
+  // the headline totals + stage distribution to that one project.
+  const loadOverview = useCallback(async (pid: number | null) => {
+    const o = await api<OverviewData>(`/api/overview${pid != null ? `?project_id=${pid}` : ""}`).catch(() => null);
+    setOverview(o);
+    if (pid == null && o?.activeProject) {
+      setSelectedProjectId(o.activeProject.id);
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
-      const [s, l, o] = await Promise.all([
+      const [s, l] = await Promise.all([
         api<ScanHistory[]>("/api/scans").catch(() => []),
         api<AuditLog[]>("/api/logs").catch(() => []),
-        api<OverviewData>("/api/overview").catch(() => null),
       ]);
       setScans(s);
       setLogs(l);
-      setOverview(o);
-      if (selectedProjectId == null && o?.activeProject) {
-        setSelectedProjectId(o.activeProject.id);
-      }
       // unread alerts badge
       try {
         const alerts = await api<Array<{ is_read: boolean; resolved_at: string | null }>>("/api/alerts?unresolved_only=true&limit=50");
@@ -56,11 +62,15 @@ export default function App() {
     } catch (err) {
       console.error("Initial data fetch failed:", err);
     }
-  }, [selectedProjectId]);
+  }, []);
 
   useEffect(() => {
     if (user) refresh();
   }, [user]);
+
+  useEffect(() => {
+    if (user) loadOverview(selectedProjectId);
+  }, [user, selectedProjectId, loadOverview]);
 
   // The "active project" follows the user's selection when one is set,
   // otherwise falls back to the server's default (first project). Switching it
@@ -118,6 +128,9 @@ export default function App() {
     if (newScan.projectId) setSelectedProjectId(newScan.projectId);
     setCurrentTab("project-detail");
     refresh();
+    // Refresh totals too — a same-project scan won't change selectedProjectId,
+    // so the scoped-overview effect wouldn't otherwise re-fire.
+    loadOverview(newScan.projectId ?? selectedProjectId);
   };
 
   const handleSelectHistoricalScan = (scan: ScanHistory) => {

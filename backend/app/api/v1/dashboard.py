@@ -25,8 +25,11 @@ def _scope(stmt, user):
 
 
 @router.get("/overview", response_model=DashboardOverview)
-def overview(db: Annotated[Session, Depends(get_db)], user: CurrentUser):
+def overview(db: Annotated[Session, Depends(get_db)], user: CurrentUser, project_id: int | None = None):
     project_ids = db.scalars(_scope(select(Project.id), user)).all()
+    # Optionally scope the whole overview to a single project the user can see.
+    if project_id is not None:
+        project_ids = [pid for pid in project_ids if pid == project_id]
     if not project_ids:
         zero = Decimal("0")
         return DashboardOverview(
@@ -187,8 +190,10 @@ def cost_trend(db: Annotated[Session, Depends(get_db)], user: CurrentUser, proje
 
 
 @router.get("/charts/stage-distribution")
-def stage_distribution(db: Annotated[Session, Depends(get_db)], user: CurrentUser):
+def stage_distribution(db: Annotated[Session, Depends(get_db)], user: CurrentUser, project_id: int | None = None):
     project_ids = db.scalars(_scope(select(Project.id), user)).all()
+    if project_id is not None:
+        project_ids = [pid for pid in project_ids if pid == project_id]
     if not project_ids:
         return []
     distribution: dict[str, int] = {}

@@ -151,13 +151,18 @@ app.get("/api/scans", async (req, res) => {
 
 app.get("/api/overview", async (req, res) => {
   try {
+    // When a project is selected the totals are scoped to it; otherwise they
+    // aggregate the whole portfolio. The projects list is always full so the
+    // header switcher can offer every project regardless of the current scope.
+    const projectId = req.query.project_id ? `?project_id=${encodeURIComponent(String(req.query.project_id))}` : "";
     const [dashRes, projectsRes] = await Promise.all([
-      callBackend(req, "/api/dashboard/overview"),
+      callBackend(req, `/api/dashboard/overview${projectId}`),
       callBackend(req, "/api/projects?limit=10"),
     ]);
     const dash = dashRes.ok ? await dashRes.json() : null;
     const projects = projectsRes.ok ? ((await projectsRes.json()) as Array<any>) : [];
-    const active = projects[0] || null;
+    const selectedId = req.query.project_id ? Number(req.query.project_id) : null;
+    const active = (selectedId != null && projects.find((p) => p.id === selectedId)) || projects[0] || null;
 
     res.json({
       activeProject: active
