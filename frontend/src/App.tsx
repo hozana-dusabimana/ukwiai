@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { LayoutDashboard, Cpu, Building, FileText, Bell } from "lucide-react";
 import Sidebar from "./components/Sidebar";
 import Header from "./components/Header";
@@ -62,6 +62,23 @@ export default function App() {
     if (user) refresh();
   }, [user]);
 
+  // The "active project" follows the user's selection when one is set,
+  // otherwise falls back to the server's default (first project). Switching it
+  // re-derives the header, sidebar, dashboard card and charts in one place.
+  const activeProject = useMemo(() => {
+    const list = overview?.projects ?? [];
+    if (selectedProjectId != null) {
+      const match = list.find((p) => p.id === selectedProjectId);
+      if (match) return match;
+    }
+    return overview?.activeProject ?? null;
+  }, [overview, selectedProjectId]);
+
+  const overviewView = useMemo(
+    () => (overview ? { ...overview, activeProject } : overview),
+    [overview, activeProject]
+  );
+
   if (authLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -119,8 +136,11 @@ export default function App() {
         currentTab={currentTab}
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
-        activeProjectName={overview?.activeProject?.name || "UKWI Project"}
-        activeProjectLocation={overview?.activeProject?.location}
+        activeProjectName={activeProject?.name || "UKWI Project"}
+        activeProjectLocation={activeProject?.location}
+        projects={overview?.projects || []}
+        activeProjectId={activeProject?.id ?? null}
+        onSelectProject={(id) => setSelectedProjectId(id)}
         onNavigate={navigateToTab}
         unreadCount={unreadAlerts}
       />
@@ -130,17 +150,17 @@ export default function App() {
           currentTab={currentTab}
           setCurrentTab={navigateToTab}
           onNewAnalysisTriggered={() => navigateToTab("ai-analysis")}
-          activeProject={overview?.activeProject || null}
+          activeProject={activeProject}
         />
 
         <main className="flex-1 px-6 lg:px-12 py-8 md:ml-64 w-full max-w-[1440px] mx-auto overflow-x-hidden min-h-full">
           {currentTab === "dashboard" && (
-            <DashboardOverview scans={scans} overview={overview} onNavigateToTab={navigateToTab} onOpenProject={openProject} />
+            <DashboardOverview scans={scans} overview={overviewView} onNavigateToTab={navigateToTab} onOpenProject={openProject} />
           )}
           {currentTab === "ai-analysis" && (
             <AnalysisWorkspace
               scans={scans}
-              overview={overview}
+              overview={overviewView}
               onAnalysisResult={handleAnalysisResult}
               onSelectScan={handleSelectHistoricalScan}
             />

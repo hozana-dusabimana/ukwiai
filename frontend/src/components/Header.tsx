@@ -1,5 +1,5 @@
-import React from "react";
-import { Search, Bell, LogOut, Settings as SettingsIcon, MapPin } from "lucide-react";
+import React, { useState } from "react";
+import { Search, Bell, LogOut, Settings as SettingsIcon, MapPin, Building2, ChevronDown, Check } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 
 interface HeaderProps {
@@ -8,6 +8,9 @@ interface HeaderProps {
   setSearchQuery: (query: string) => void;
   activeProjectName?: string;
   activeProjectLocation?: string;
+  projects?: Array<{ id: number; name: string; location?: string; code?: string }>;
+  activeProjectId?: number | null;
+  onSelectProject?: (id: number) => void;
   onNavigate: (tab: string) => void;
   unreadCount?: number;
 }
@@ -18,11 +21,18 @@ export default function Header({
   setSearchQuery,
   activeProjectName = "UKWI Project",
   activeProjectLocation,
+  projects = [],
+  activeProjectId = null,
+  onSelectProject,
   onNavigate,
   unreadCount = 0,
 }: HeaderProps) {
   const { user, logout } = useAuth();
+  const [projOpen, setProjOpen] = useState(false);
   const initials = (user?.full_name || "U U").split(/\s+/).map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
+
+  const hasProjects = projects.length > 0;
+  const showSearch = currentTab !== "projects" && currentTab !== "project-detail";
 
   const searchPlaceholder =
     currentTab === "system-health" ? "Search system events..." :
@@ -31,30 +41,84 @@ export default function Header({
 
   return (
     <header className="bg-white border-b border-gray-200 sticky top-0 z-40 flex justify-between items-center h-16 px-6 lg:px-10 w-full">
-      <div className="flex items-center gap-6 flex-1">
-        {currentTab === "projects" || currentTab === "project-detail" ? (
-          <div className="flex items-center gap-4">
-            <h2 className="font-sans text-xl font-bold text-gray-900 truncate max-w-[240px]" title={activeProjectName}>{activeProjectName}</h2>
-            {activeProjectLocation && (
-              <div className="hidden lg:flex items-center bg-gray-50 border border-gray-200 px-3 py-1 rounded gap-1.5 text-xs text-gray-600">
-                <MapPin className="text-gray-400 w-4 h-4" />
-                <span className="truncate max-w-[200px]">{activeProjectLocation}</span>
-              </div>
+      <div className="flex items-center gap-4 flex-1 min-w-0">
+        {/* Project switcher — always available so the active project can be
+            changed from any page. Falls back to a plain title with no projects. */}
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={() => hasProjects && setProjOpen((v) => !v)}
+            disabled={!hasProjects}
+            data-testid="project-switcher"
+            title={activeProjectName}
+            className="flex items-center gap-2 px-2 py-1.5 -ml-2 rounded-lg hover:bg-gray-50 disabled:hover:bg-transparent disabled:cursor-default transition-colors"
+          >
+            <Building2 className="w-4 h-4 text-orange-600 shrink-0" />
+            <span className="font-sans text-lg font-bold text-gray-900 truncate max-w-[180px] lg:max-w-[220px]">{activeProjectName}</span>
+            {hasProjects && (
+              <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform shrink-0 ${projOpen ? "rotate-180" : ""}`} />
             )}
-          </div>
-        ) : (
-          <div className="flex items-center gap-4 w-full max-w-md">
-            <div className="flex items-center w-full bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-lg focus-within:ring-2 focus-within:ring-sky-100 focus-within:border-gray-400">
-              <Search className="text-gray-400 w-4 h-4 mr-2" />
-              <input
-                type="text"
-                placeholder={searchPlaceholder}
-                value={searchQuery}
-                aria-label="Search field"
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="bg-transparent border-none outline-none focus:outline-none focus:ring-0 text-sm w-full text-gray-800 placeholder-gray-400"
+          </button>
+
+          {projOpen && (
+            <>
+              <button
+                aria-hidden
+                tabIndex={-1}
+                onClick={() => setProjOpen(false)}
+                className="fixed inset-0 z-40 cursor-default"
               />
-            </div>
+              <div
+                role="menu"
+                data-testid="project-switcher-menu"
+                className="absolute left-0 top-full mt-1.5 z-50 w-72 bg-white border border-gray-200 rounded-lg shadow-xl py-1 max-h-80 overflow-auto"
+              >
+                <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-gray-400">Switch project</div>
+                {projects.map((p) => {
+                  const isActive = p.id === activeProjectId;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={isActive}
+                      onClick={() => {
+                        onSelectProject?.(p.id);
+                        setProjOpen(false);
+                      }}
+                      className={`w-full text-left px-3 py-2 flex items-center justify-between gap-2 hover:bg-orange-50 transition-colors ${isActive ? "bg-orange-50/60" : ""}`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-slate-900 truncate">{p.name}</div>
+                        <div className="text-[11px] text-gray-500 truncate">{p.location || p.code || ""}</div>
+                      </div>
+                      {isActive && <Check className="w-4 h-4 text-orange-600 shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+
+        {activeProjectLocation && !showSearch && (
+          <div className="hidden lg:flex items-center bg-gray-50 border border-gray-200 px-3 py-1 rounded gap-1.5 text-xs text-gray-600">
+            <MapPin className="text-gray-400 w-4 h-4" />
+            <span className="truncate max-w-[200px]">{activeProjectLocation}</span>
+          </div>
+        )}
+
+        {showSearch && (
+          <div className="flex items-center w-full max-w-md bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-lg focus-within:ring-2 focus-within:ring-sky-100 focus-within:border-gray-400">
+            <Search className="text-gray-400 w-4 h-4 mr-2" />
+            <input
+              type="text"
+              placeholder={searchPlaceholder}
+              value={searchQuery}
+              aria-label="Search field"
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="bg-transparent border-none outline-none focus:outline-none focus:ring-0 text-sm w-full text-gray-800 placeholder-gray-400"
+            />
           </div>
         )}
       </div>
