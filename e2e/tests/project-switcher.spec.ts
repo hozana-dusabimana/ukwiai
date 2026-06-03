@@ -40,4 +40,9 @@ test("header project switcher changes the active project", async ({ page }) => {
   // card subtitle reflects the active project name.
   const escaped = targetName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   await expect(page.getByText(new RegExp(`In\\s+${escaped}`, "i")).first()).toBeVisible();
+
+  // The AI Analysis "attach scan to" selector follows the global switch.
+  await page.getByRole("button", { name: "AI Analysis" }).click();
+  const attach = page.getByTestId("attach-scan-project");
+  await expect(attach.locator("option:checked")).toHaveText(targetName);
 });

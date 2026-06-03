@@ -9,6 +9,7 @@ interface AnalysisWorkspaceProps {
   overview: OverviewData | null;
   onAnalysisResult: (newScan: ScanHistory) => void;
   onSelectScan: (scan: ScanHistory) => void;
+  onSelectProject?: (id: number) => void;
 }
 
 export default function AnalysisWorkspace({
@@ -16,14 +17,17 @@ export default function AnalysisWorkspace({
   overview,
   onAnalysisResult,
   onSelectScan,
+  onSelectProject,
 }: AnalysisWorkspaceProps) {
   const toast = useToast();
   const latestScan = scans[0];
   const projectName = overview?.activeProject?.name || "UKWI Project";
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(overview?.activeProject?.id || null);
 
+  // Keep the "attach scan to" target in sync with the global project switcher
+  // (the header). Switching the project anywhere updates this selector too.
   useEffect(() => {
-    if (selectedProjectId == null && overview?.activeProject?.id) {
+    if (overview?.activeProject?.id && overview.activeProject.id !== selectedProjectId) {
       setSelectedProjectId(overview.activeProject.id);
     }
   }, [overview?.activeProject?.id]);
@@ -353,8 +357,14 @@ export default function AnalysisWorkspace({
         <div className="flex items-center gap-2 text-xs">
           <span className="text-[10px] uppercase tracking-wider font-bold text-gray-400">Attach scan to:</span>
           <select
+            data-testid="attach-scan-project"
             value={selectedProjectId ?? ""}
-            onChange={(e) => setSelectedProjectId(e.target.value ? Number(e.target.value) : null)}
+            onChange={(e) => {
+              const id = e.target.value ? Number(e.target.value) : null;
+              setSelectedProjectId(id);
+              // Propagate up so the header switcher and dashboard stay in sync.
+              if (id != null) onSelectProject?.(id);
+            }}
             className="bg-white border border-gray-200 px-3 py-2 rounded font-bold text-slate-900"
           >
             {(overview?.projects || []).map((p) => (

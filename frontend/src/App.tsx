@@ -176,6 +176,7 @@ export default function App() {
               overview={overviewView}
               onAnalysisResult={handleAnalysisResult}
               onSelectScan={handleSelectHistoricalScan}
+              onSelectProject={(id) => setSelectedProjectId(id)}
             />
           )}
           {currentTab === "projects" && <ProjectsList onOpenProject={openProject} />}
