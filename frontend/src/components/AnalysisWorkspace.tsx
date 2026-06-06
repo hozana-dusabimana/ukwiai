@@ -58,7 +58,7 @@ export default function AnalysisWorkspace({
           api<Array<{ predicted_stage?: string; predicted_progress_percentage: number | string; confidence_score: number | string }>>(
             `/api/ai/projects/${selectedProjectId}/analysis-history?limit=1`
           ).catch(() => []),
-          api<{ project: { total_budget: number | string }; total_expenses: number | string }>(
+          api<{ project: { total_budget: number | string }; total_expenses: number | string; effective_total_spent?: number | string }>(
             `/api/projects/${selectedProjectId}/summary`
           ).catch(() => null),
         ]);
@@ -77,7 +77,9 @@ export default function AnalysisWorkspace({
 
         if (summary) {
           const totalBudget = Number(summary.project.total_budget) || 0;
-          const totalSpent = Number(summary.total_expenses) || 0;
+          // Effective spend = recorded expenses, or the AI-inferred spend when
+          // nothing has been logged yet, so the tile isn't stuck at RWF 0.
+          const totalSpent = Number(summary.effective_total_spent ?? summary.total_expenses) || 0;
           const remaining = totalBudget - totalSpent;
           const overBudget = remaining < 0;
           setActiveBudget({

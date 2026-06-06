@@ -22,7 +22,7 @@ from app.models.budget import BudgetRecord
 from app.models.analysis import ProgressAnalysis
 from app.models.cost import CostEstimation
 from app.models.report import Report
-from app.services.cost_estimation import total_recorded_expenses
+from app.services.cost_estimation import total_recorded_expenses, total_ai_inferred_cost
 
 
 def _ensure_reports_dir() -> Path:
@@ -42,6 +42,8 @@ def _gather(db: Session, project: Project) -> dict[str, Any]:
         select(BudgetRecord).where(BudgetRecord.project_id == project.id).order_by(BudgetRecord.expense_date)
     ).all()
     total_spent = total_recorded_expenses(db, project.id)
+    ai_inferred = total_ai_inferred_cost(db, project.id)
+    effective_spent = total_spent if total_spent > ai_inferred else ai_inferred
     latest_analysis = db.scalars(
         select(ProgressAnalysis)
         .where(ProgressAnalysis.project_id == project.id)
@@ -64,6 +66,8 @@ def _gather(db: Session, project: Project) -> dict[str, Any]:
     return {
         "expenses": expenses,
         "total_spent": total_spent,
+        "ai_inferred_spent": ai_inferred,
+        "effective_spent": effective_spent,
         "latest_analysis": latest_analysis,
         "latest_estimation": latest_estimation,
         "by_category": by_category,
@@ -135,6 +139,8 @@ def generate_pdf_report(db: Session, project: Project, generated_by_id: int, rep
         rows = [
             ["Total budget", f"{project.total_budget:,.2f}"],
             ["Recorded spend", f"{data['total_spent']:,.2f}"],
+            ["AI-inferred spend", f"{data['ai_inferred_spent']:,.2f}"],
+            ["Effective spend", f"{data['effective_spent']:,.2f}"],
             ["Estimated spend (AI)", f"{e.estimated_cost_used if e else 0:,.2f}"],
             ["Variance", f"{e.variance if e else 0:,.2f}"],
             ["Projected total", f"{e.projected_total_cost if e else 0:,.2f}"],
@@ -213,6 +219,8 @@ def generate_excel_report(db: Session, project: Project, generated_by_id: int, r
     ws.append(["Status", project.status.value])
     ws.append(["Budget", float(project.total_budget or 0)])
     ws.append(["Recorded spend", float(data["total_spent"])])
+    ws.append(["AI-inferred spend", float(data["ai_inferred_spent"])])
+    ws.append(["Effective spend", float(data["effective_spent"])])
 
     e = data["latest_estimation"]
     if e:

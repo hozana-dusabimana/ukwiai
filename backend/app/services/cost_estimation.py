@@ -50,12 +50,17 @@ def compute_cost_estimation(
 
     total_budget = Decimal(str(project.total_budget or 0))
     actual = total_recorded_expenses(db, project.id)
+    # When no expenses have been logged yet, fall back to the AI-inferred spend
+    # (rolled up from per-stage allocations the vision model has marked done) so
+    # "spend so far" and the projection aren't stuck at zero on a fresh project.
+    ai_inferred = total_ai_inferred_cost(db, project.id)
+    effective = actual if actual > ai_inferred else ai_inferred
     estimated_used = _q(total_budget * progress / Decimal("100")) if total_budget else Decimal("0.00")
-    remaining = _q(total_budget - actual)
+    remaining = _q(total_budget - effective)
     variance = _q(actual - estimated_used)
 
     if progress > 0:
-        projected_total = _q(actual / progress * Decimal("100"))
+        projected_total = _q(effective / progress * Decimal("100"))
     else:
         projected_total = total_budget
 

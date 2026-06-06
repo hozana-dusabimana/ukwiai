@@ -96,7 +96,9 @@ app.get("/api/scans", async (req, res) => {
 
     const scans = enriched.flatMap(({ proj, summary, images }) => {
       const totalBudget = Number(proj.total_budget) || 0;
-      const totalSpent = Number(summary?.total_expenses ?? 0);
+      // Prefer the effective (recorded-or-AI-inferred) spend so cards reflect the
+      // AI's read of progress before any expense is manually logged.
+      const totalSpent = Number(summary?.effective_total_spent ?? summary?.total_expenses ?? 0);
       const remaining = Math.max(0, totalBudget - totalSpent);
       const overBudget = totalSpent > totalBudget;
       const status = pickVarianceStatus(summary?.deviation_status, overBudget);
@@ -252,7 +254,11 @@ app.post("/api/analyze", async (req, res) => {
     const progress = Math.round(a.predicted_progress_percentage ?? 0);
     const confidence = Number(((a.confidence_score ?? 0) * 100).toFixed(1));
     const totalBudget = Number(analysis.project_total_budget ?? 0);
-    const estimated = Number(cost.estimated_total_cost ?? cost.projected_total_cost ?? 0);
+    // "Consumed so far" = AI-estimated cost used at the detected progress. Falls
+    // back to the projected total only if the estimate is missing. (Previously
+    // this read projected_total_cost, which is 0 until expenses are logged — so
+    // the tile always showed RWF 0 even on a near-complete project.)
+    const estimated = Number(cost.estimated_cost_used ?? cost.projected_total_cost ?? 0);
     const overBudget = estimated > totalBudget && totalBudget > 0;
     const remaining = Math.max(0, totalBudget - estimated);
 

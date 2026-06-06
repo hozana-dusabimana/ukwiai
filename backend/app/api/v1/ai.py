@@ -22,7 +22,12 @@ from app.services.cost_estimation import (
     apply_ai_inferred_progress,
     find_project_stage,
 )
-from app.services.alerts import evaluate_cost_alerts
+from app.services.alerts import (
+    evaluate_cost_alerts,
+    evaluate_delay_alerts,
+    evaluate_milestone_alerts,
+    record_scan_activity,
+)
 from app.services.audit import log_action
 from app.services.access import user_can_access
 from app.services.storage import read_image_bytes, save_image_bytes
@@ -146,18 +151,22 @@ async def analyze_image(
     db.add(analysis)
     db.flush()
 
-    estimation = compute_cost_estimation(db, proj, analysis.predicted_progress_percentage, image=image)
-    evaluate_cost_alerts(db, proj, estimation)
-
-    # Push the AI's stage detection back into project_stages so the budget
+    # Push the AI's stage detection back into project_stages first so the budget
     # breakdown and timeline reflect what the camera saw, even before an
-    # accountant logs real BudgetRecord rows.
+    # accountant logs real BudgetRecord rows. The cost estimation below then
+    # rolls those AI-inferred per-stage costs into "spend so far".
     apply_ai_inferred_progress(
         db,
         proj.id,
         analysis.predicted_stage,
         analysis.predicted_progress_percentage,
     )
+
+    estimation = compute_cost_estimation(db, proj, analysis.predicted_progress_percentage, image=image)
+    new_alerts = evaluate_cost_alerts(db, proj, estimation)
+    new_alerts += evaluate_delay_alerts(db, proj)
+    new_alerts += evaluate_milestone_alerts(db, proj)
+    record_scan_activity(db, proj, analysis, estimation, new_alerts)
 
     log_action(db, user.id, "ai.analyze", "image", image.id, details={"project_id": proj.id})
     db.commit()

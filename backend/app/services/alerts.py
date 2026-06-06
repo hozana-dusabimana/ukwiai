@@ -1,11 +1,15 @@
 from __future__ import annotations
 from datetime import datetime, date
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.alert import Alert, AlertType, AlertSeverity
 from app.models.cost import CostEstimation, DeviationStatus
-from app.models.project import Project
+from app.models.project import Project, ProjectAssignee
+from app.models.notification import Notification
+from app.models.stage import ProjectStage, ConstructionStage, ProjectStageStatus
+from app.models.user import User, UserRole
 
 
 def evaluate_cost_alerts(db: Session, project: Project, estimation: CostEstimation) -> list[Alert]:
@@ -73,3 +77,103 @@ def evaluate_delay_alerts(db: Session, project: Project) -> list[Alert]:
     )
     db.add(a)
     return [a]
+
+
+def evaluate_milestone_alerts(db: Session, project: Project) -> list[Alert]:
+    """Raise a milestone alert for each stage the AI has marked completed that
+    isn't already flagged. Keeps the alerts feed populated during healthy,
+    on-budget progress (where no overrun/delay alert would ever fire)."""
+    completed = db.execute(
+        select(ConstructionStage.stage_name)
+        .join(ProjectStage, ProjectStage.stage_id == ConstructionStage.id)
+        .where(
+            ProjectStage.project_id == project.id,
+            ProjectStage.status == ProjectStageStatus.completed,
+        )
+        .order_by(ConstructionStage.stage_order)
+    ).scalars().all()
+    if not completed:
+        return []
+
+    existing = set(
+        db.scalars(
+            select(Alert.message).where(
+                Alert.project_id == project.id,
+                Alert.alert_type == AlertType.milestone,
+            )
+        ).all()
+    )
+    new_alerts: list[Alert] = []
+    for name in completed:
+        message = f"Milestone reached: “{name}” is complete."
+        if message in existing:
+            continue
+        a = Alert(
+            project_id=project.id,
+            alert_type=AlertType.milestone,
+            severity=AlertSeverity.low,
+            message=message,
+        )
+        db.add(a)
+        new_alerts.append(a)
+    return new_alerts
+
+
+def _project_recipient_ids(db: Session, project: Project) -> list[int]:
+    """Everyone who should hear about this project: its assignees plus all admins."""
+    ids = set(
+        db.scalars(
+            select(ProjectAssignee.user_id).where(ProjectAssignee.project_id == project.id)
+        ).all()
+    )
+    ids.update(
+        db.scalars(select(User.id).where(User.role == UserRole.admin)).all()
+    )
+    return list(ids)
+
+
+def notify_project_users(
+    db: Session,
+    project: Project,
+    title: str,
+    message: str,
+    type_: str = "info",
+    link: str | None = None,
+) -> list[Notification]:
+    """Fan a notification out to every user who can see this project."""
+    notes = [
+        Notification(user_id=uid, title=title, message=message, type=type_, link=link)
+        for uid in _project_recipient_ids(db, project)
+    ]
+    db.add_all(notes)
+    return notes
+
+
+def record_scan_activity(
+    db: Session,
+    project: Project,
+    analysis,
+    estimation: CostEstimation,
+    new_alerts: list[Alert],
+) -> None:
+    """After an AI scan: notify project users of the result and surface any
+    freshly-raised alerts as notifications too."""
+    progress = float(analysis.predicted_progress_percentage or 0)
+    stage = analysis.predicted_stage or "Unknown stage"
+    notify_project_users(
+        db,
+        project,
+        title=f"AI scan: {project.project_name}",
+        message=f"Detected “{stage}” at {progress:.0f}% progress.",
+        type_="analysis",
+        link="/site-logs",
+    )
+    for a in new_alerts:
+        notify_project_users(
+            db,
+            project,
+            title=f"Alert: {a.alert_type.value.replace('_', ' ').title()}",
+            message=a.message,
+            type_="alert",
+            link="/site-logs",
+        )
