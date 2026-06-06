@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { FileText, Download, Sparkles, ArrowRight } from "lucide-react";
+import { FileText, Download, Sparkles, ArrowRight, Trash2, RefreshCw } from "lucide-react";
 import { api, getToken } from "../lib/api";
+import { useAuth } from "../auth/AuthContext";
+import { capabilitiesFor } from "../lib/roles";
 import { useToast } from "../ui/Toast";
 import { PageLoader, InlineError, EmptyState } from "../ui/primitives";
 
@@ -24,11 +26,14 @@ const REPORT_TYPES: { value: string; label: string; description: string }[] = [
 
 export default function Reports() {
   const toast = useToast();
+  const { user } = useAuth();
+  const caps = capabilitiesFor(user?.role);
   const [projects, setProjects] = useState<Project[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
   const [projectId, setProjectId] = useState<number | null>(null);
   const [format, setFormat] = useState<"pdf" | "excel">("pdf");
   const [generating, setGenerating] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -72,6 +77,20 @@ export default function Reports() {
       toast.error(`Report failed: ${e.message}`);
     } finally {
       setGenerating(null);
+    }
+  };
+
+  const remove = async (report: Report) => {
+    if (!confirm(`Delete ${report.report_type} report #${report.id}? This removes the file permanently and cannot be undone.`)) return;
+    setDeletingId(report.id);
+    try {
+      await api(`/api/reports/${report.id}`, { method: "DELETE" });
+      setReports((all) => all.filter((r) => r.id !== report.id));
+      toast.success("Report deleted.");
+    } catch (e: any) {
+      toast.error(`Delete failed: ${e.message}`);
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -164,9 +183,22 @@ export default function Reports() {
                         <div className="text-[10px] text-gray-400 font-mono truncate">{new Date(r.generated_at).toLocaleString()}{r.project_id ? ` · project #${r.project_id}` : ""}</div>
                       </div>
                     </div>
-                    <button onClick={() => download(r)} className="bg-white border border-gray-200 hover:bg-gray-50 text-slate-900 text-[10px] font-bold uppercase tracking-wider px-3 py-2 rounded flex items-center gap-1.5">
-                      <Download className="w-3.5 h-3.5" /> Download
-                    </button>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button onClick={() => download(r)} className="bg-white border border-gray-200 hover:bg-gray-50 text-slate-900 text-[10px] font-bold uppercase tracking-wider px-3 py-2 rounded flex items-center gap-1.5">
+                        <Download className="w-3.5 h-3.5" /> Download
+                      </button>
+                      {caps.canGenerateReport && (
+                        <button
+                          onClick={() => remove(r)}
+                          disabled={deletingId === r.id}
+                          title="Delete report"
+                          aria-label={`Delete ${r.report_type} report #${r.id}`}
+                          className="bg-white border border-gray-200 hover:bg-red-600 hover:text-white hover:border-red-600 text-red-600 px-3 py-2 rounded flex items-center disabled:opacity-60 transition-colors"
+                        >
+                          {deletingId === r.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
+                    </div>
                   </li>
                 ))}
               </ul>

@@ -147,6 +147,31 @@ def download(
     )
 
 
+@router.delete("/reports/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_report(
+    report_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_manager_or_admin)],
+):
+    """Delete a generated report: removes the DB row and the file on disk.
+    Membership-scoped so a manager can't delete reports for a project they're
+    not assigned to."""
+    r = db.get(Report, report_id)
+    if not r:
+        raise HTTPException(404, "Report not found")
+    if r.project_id is not None and not user_can_access(db, r.project_id, user):
+        raise HTTPException(403, "You are not assigned to this project.")
+    p = Path(r.file_path)
+    if p.exists():
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    db.delete(r)
+    log_action(db, user.id, "report.delete", "report", report_id)
+    db.commit()
+
+
 def _html_wrapper(title: str, body: str) -> str:
     """Tiny dark-themed HTML shell shared by /view and /save."""
     return f"""<!doctype html><html lang="en"><head>
