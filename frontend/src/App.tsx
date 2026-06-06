@@ -138,6 +138,17 @@ export default function App() {
     setCurrentTab("project-detail");
   };
 
+  const handleDeleteScan = async (scan: ScanHistory) => {
+    if (scan.imageId == null) {
+      // Placeholder card (no backing capture) — just drop it from the local list.
+      setScans((prev) => prev.filter((s) => s.id !== scan.id));
+      return;
+    }
+    await api(`/api/images/${scan.imageId}`, { method: "DELETE" });
+    setScans((prev) => prev.filter((s) => s.id !== scan.id));
+    loadOverview(scan.projectId ?? selectedProjectId);
+  };
+
   const openProject = (id: number) => {
     setSelectedProjectId(id);
     setCurrentTab("project-detail");
@@ -176,6 +187,7 @@ export default function App() {
               overview={overviewView}
               onAnalysisResult={handleAnalysisResult}
               onSelectScan={handleSelectHistoricalScan}
+              onDeleteScan={handleDeleteScan}
               onSelectProject={(id) => setSelectedProjectId(id)}
             />
           )}

@@ -1,6 +1,9 @@
 export interface ScanHistory {
   id: string;
   projectId?: number | null;
+  // Backing SiteImage id when this card is a persisted capture; null for
+  // placeholder cards (projects with no images yet). Used to delete the entry.
+  imageId?: number | null;
   title: string;
   date: string;
   progress: number;

@@ -1,14 +1,17 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Camera, CloudUpload, ArrowRight, Clock, MoreVertical, CheckCircle2, AlertTriangle, ShieldCheck, VideoOff, RefreshCw } from "lucide-react";
+import { Camera, CloudUpload, ArrowRight, Clock, CheckCircle2, AlertTriangle, ShieldCheck, VideoOff, RefreshCw, Trash2 } from "lucide-react";
 import { ScanHistory, OverviewData } from "../types";
 import { api } from "../lib/api";
 import { useToast } from "../ui/Toast";
+import { useAuth } from "../auth/AuthContext";
+import { capabilitiesFor } from "../lib/roles";
 
 interface AnalysisWorkspaceProps {
   scans: ScanHistory[];
   overview: OverviewData | null;
   onAnalysisResult: (newScan: ScanHistory) => void;
   onSelectScan: (scan: ScanHistory) => void;
+  onDeleteScan?: (scan: ScanHistory) => Promise<void>;
   onSelectProject?: (id: number) => void;
 }
 
@@ -17,9 +20,28 @@ export default function AnalysisWorkspace({
   overview,
   onAnalysisResult,
   onSelectScan,
+  onDeleteScan,
   onSelectProject,
 }: AnalysisWorkspaceProps) {
   const toast = useToast();
+  const { user } = useAuth();
+  const caps = capabilitiesFor(user?.role);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const deleteScan = async (scan: ScanHistory, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onDeleteScan) return;
+    if (!confirm(`Delete "${scan.title}"? This removes the capture and its analysis. This cannot be undone.`)) return;
+    setDeletingId(scan.id);
+    try {
+      await onDeleteScan(scan);
+      toast.success("Analysis deleted.");
+    } catch (err: any) {
+      toast.error(err?.message || "Could not delete analysis.");
+    } finally {
+      setDeletingId(null);
+    }
+  };
   const latestScan = scans[0];
   const projectName = overview?.activeProject?.name || "UKWI Project";
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(overview?.activeProject?.id || null);
@@ -614,6 +636,19 @@ export default function AnalysisWorkspace({
                 <div className="absolute top-3 right-3 bg-slate-900/80 backdrop-blur-sm text-white text-[10px] font-bold px-2.5 py-1 rounded">
                   {scan.progress}% PROG
                 </div>
+                {caps.canUploadImage && onDeleteScan && (
+                  <button
+                    onClick={(e) => deleteScan(scan, e)}
+                    disabled={deletingId === scan.id}
+                    title="Delete analysis"
+                    aria-label={`Delete ${scan.title}`}
+                    className="absolute top-3 left-3 bg-white/90 hover:bg-red-600 hover:text-white text-red-600 rounded p-1.5 shadow-sm opacity-0 group-hover:opacity-100 transition-all disabled:opacity-60"
+                  >
+                    {deletingId === scan.id
+                      ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      : <Trash2 className="w-3.5 h-3.5" />}
+                  </button>
+                )}
               </div>
               <div className="p-4">
                 <div className="font-sans font-bold text-xs text-slate-900 uppercase tracking-wide mb-2 block truncate">
@@ -624,7 +659,6 @@ export default function AnalysisWorkspace({
                     <Clock className="w-3.5 h-3.5 text-gray-400" />
                     {scan.date}
                   </span>
-                  <MoreVertical className="w-4 h-4 text-gray-400 group-hover:text-slate-900 transition-colors" />
                 </div>
               </div>
             </div>

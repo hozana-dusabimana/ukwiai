@@ -112,6 +112,7 @@ app.get("/api/scans", async (req, res) => {
         return [{
           id: `proj-${proj.id}`,
           projectId: proj.id,
+          imageId: null,
           title: proj.project_name,
           date: formatDate(proj.start_date),
           progress,
@@ -128,6 +129,7 @@ app.get("/api/scans", async (req, res) => {
       return images.map((img: any) => ({
         id: `img-${img.id}`,
         projectId: proj.id,
+        imageId: img.id,
         title: `${proj.project_name} · ${img.original_filename || `Image ${img.id}`}`,
         date: formatDate(img.captured_date || img.created_at),
         progress,
@@ -265,6 +267,7 @@ app.post("/api/analyze", async (req, res) => {
     const scanRecord = {
       id: `scan-${Date.now()}`,
       projectId: chosenProject,
+      imageId: a.image_id ?? null,
       title: name || a.predicted_stage || "New site scan",
       date: formatDate(a.analysis_date || new Date().toISOString()),
       progress,
