@@ -39,10 +39,11 @@ export default function AnalysisWorkspace({
   );
 
   const [activeStage, setActiveStage] = useState<string>(latestScan?.stageName || "Awaiting first scan");
-  const [activeBudget, setActiveBudget] = useState({
+  const [activeBudget, setActiveBudget] = useState<{ consumed: string; remaining: string; variance: string; estimated: boolean }>({
     consumed: latestScan?.budgetConsumed || "RWF 0",
     remaining: latestScan?.remainingBudget || overview?.totals?.remainingBudget || "RWF 0",
     variance: latestScan?.projectedVariance || "Pending...",
+    estimated: !!latestScan,
   });
 
   // Re-fetch project-specific data whenever the selected project changes.
@@ -79,6 +80,7 @@ export default function AnalysisWorkspace({
           const totalBudget = Number(summary.project.total_budget) || 0;
           // Effective spend = recorded expenses, or the AI-inferred spend when
           // nothing has been logged yet, so the tile isn't stuck at RWF 0.
+          const recorded = Number(summary.total_expenses) || 0;
           const totalSpent = Number(summary.effective_total_spent ?? summary.total_expenses) || 0;
           const remaining = totalBudget - totalSpent;
           const overBudget = remaining < 0;
@@ -86,6 +88,7 @@ export default function AnalysisWorkspace({
             consumed: fmtBudget(totalSpent),
             remaining: fmtBudget(Math.max(0, remaining)),
             variance: overBudget ? `Over by ${fmtBudget(Math.abs(remaining))}` : `${fmtBudget(remaining)} remaining`,
+            estimated: totalSpent > recorded,
           });
         }
       } catch (err) {
@@ -242,6 +245,7 @@ export default function AnalysisWorkspace({
         consumed: newScan.budgetConsumed,
         remaining: newScan.remainingBudget,
         variance: newScan.projectedVariance,
+        estimated: true,
       });
       toast.success(`AI detected: ${newScan.stageName} (${newScan.progress}%)`);
 
@@ -540,11 +544,14 @@ export default function AnalysisWorkspace({
               </div>
               <div>
                 <div className="font-sans text-[10px] text-gray-400 font-bold uppercase tracking-wider">
-                  Budget Consumed
+                  Budget Consumed{activeBudget.estimated ? " · AI est." : ""}
                 </div>
                 <div className="font-mono text-lg font-bold text-slate-900 mt-0.5">
                   {activeBudget.consumed}
                 </div>
+                {activeBudget.estimated && (
+                  <div className="text-[9px] text-gray-400 mt-0.5">Estimated from photo progress — no expenses logged yet</div>
+                )}
               </div>
             </div>
 

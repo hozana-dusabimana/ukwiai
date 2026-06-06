@@ -145,18 +145,23 @@ def generate_pdf_report(db: Session, project: Project, generated_by_id: int, rep
         e = data["latest_estimation"]
         rows = [
             ["Total budget", f"{project.total_budget:,.2f}"],
-            ["Recorded spend", f"{data['total_spent']:,.2f}"],
-            ["AI-inferred spend", f"{data['ai_inferred_spent']:,.2f}"],
-            ["Effective spend", f"{data['effective_spent']:,.2f}"],
-            ["Estimated spend (AI)", f"{e.estimated_cost_used if e else 0:,.2f}"],
-            ["Variance", f"{e.variance if e else 0:,.2f}"],
-            ["Projected total", f"{e.projected_total_cost if e else 0:,.2f}"],
-            ["Deviation", e.deviation_status.value if e else "-"],
+            ["Recorded spend (actuals logged)", f"{data['total_spent']:,.2f}"],
+            ["AI-estimated spend to date", f"{data['effective_spent']:,.2f}"],
+            ["Expected spend at this progress", f"{e.estimated_cost_used if e else 0:,.2f}"],
+            ["Variance (estimated vs expected)", f"{e.variance if e else 0:,.2f}"],
+            ["Projected final cost", f"{e.projected_total_cost if e else 0:,.2f}"],
+            ["Budget status", e.deviation_status.value if e else "-"],
         ]
-        t = Table(rows, colWidths=[5 * cm, 11 * cm])
+        t = Table(rows, colWidths=[7 * cm, 9 * cm])
         t.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.5, colors.grey),
                                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey)]))
-        elems += [t, Spacer(1, 0.4 * cm)]
+        note = Paragraph(
+            "<i>Recorded spend</i> reflects actual expenses logged by the team and stays at "
+            "0.00 until costs are entered under Financials. Until then, <i>AI-estimated spend</i> "
+            "(inferred from photo-detected progress) drives the variance, projection and status.",
+            ParagraphStyle("UkwiNote", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#666666")),
+        )
+        elems += [t, Spacer(1, 0.2 * cm), note, Spacer(1, 0.4 * cm)]
 
         if data["by_category"]:
             elems.append(Paragraph("Spend by category", styles["UkwiH2"]))
@@ -225,16 +230,18 @@ def generate_excel_report(db: Session, project: Project, generated_by_id: int, r
     ws.append(["Code", project.project_code])
     ws.append(["Status", project.status.value])
     ws.append(["Budget", float(project.total_budget or 0)])
-    ws.append(["Recorded spend", float(data["total_spent"])])
-    ws.append(["AI-inferred spend", float(data["ai_inferred_spent"])])
-    ws.append(["Effective spend", float(data["effective_spent"])])
+    ws.append(["Recorded spend (actuals logged)", float(data["total_spent"])])
+    ws.append(["AI-estimated spend to date", float(data["effective_spent"])])
 
     e = data["latest_estimation"]
     if e:
-        ws.append(["Estimated spend (AI)", float(e.estimated_cost_used or 0)])
-        ws.append(["Variance", float(e.variance or 0)])
-        ws.append(["Projected total", float(e.projected_total_cost or 0)])
-        ws.append(["Deviation", e.deviation_status.value])
+        ws.append(["Expected spend at this progress", float(e.estimated_cost_used or 0)])
+        ws.append(["Variance (estimated vs expected)", float(e.variance or 0)])
+        ws.append(["Projected final cost", float(e.projected_total_cost or 0)])
+        ws.append(["Budget status", e.deviation_status.value])
+    ws.append([])
+    ws.append(["Note", "Recorded spend stays 0 until expenses are logged under Financials; "
+                       "AI-estimated spend (from photo progress) drives variance/projection until then."])
 
     ws2 = wb.create_sheet("Expenses")
     ws2.append(["Date", "Category", "Amount", "Description", "Stage ID"])
