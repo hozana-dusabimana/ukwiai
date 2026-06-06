@@ -22,7 +22,11 @@ from app.models.budget import BudgetRecord
 from app.models.analysis import ProgressAnalysis
 from app.models.cost import CostEstimation
 from app.models.report import Report
-from app.services.cost_estimation import total_recorded_expenses, total_ai_inferred_cost
+from app.services.cost_estimation import (
+    total_recorded_expenses,
+    total_ai_inferred_cost,
+    compute_cost_estimation,
+)
 
 
 def _ensure_reports_dir() -> Path:
@@ -50,12 +54,15 @@ def _gather(db: Session, project: Project) -> dict[str, Any]:
         .order_by(ProgressAnalysis.analysis_date.desc())
         .limit(1)
     ).first()
-    latest_estimation = db.scalars(
-        select(CostEstimation)
-        .where(CostEstimation.project_id == project.id)
-        .order_by(CostEstimation.generated_at.desc())
-        .limit(1)
-    ).first()
+    # Compute a fresh estimation (not persisted) so the report always reflects
+    # the current effective spend + latest progress, rather than rendering a
+    # stale stored snapshot whose projected total may predate logged costs.
+    progress = (
+        latest_analysis.predicted_progress_percentage
+        if latest_analysis and latest_analysis.predicted_progress_percentage is not None
+        else 0
+    )
+    latest_estimation = compute_cost_estimation(db, project, progress, persist=False)
     by_category = dict(
         db.execute(
             select(BudgetRecord.expense_category, func.coalesce(func.sum(BudgetRecord.amount), 0))

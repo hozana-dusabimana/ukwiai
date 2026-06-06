@@ -33,11 +33,16 @@ def compute_cost_estimation(
 ) -> CostEstimation:
     """Apply the spec's cost estimation formulas and (optionally) persist a snapshot.
 
-    Formulas:
+    "Spend so far" uses the *effective* figure — recorded expenses, or the
+    AI-inferred per-stage roll-up when nothing has been logged yet — so the
+    variance/projection/deviation stay meaningful on a project whose costs are
+    only being tracked from photos.
+
+    Formulas (effective = max(recorded, AI-inferred)):
       estimated_cost_used = (progress / 100) * total_budget
-      remaining_budget    = total_budget - actual_cost_recorded
-      variance            = actual_cost_recorded - estimated_cost_used
-      projected_total_cost = (actual_cost_recorded / progress) * 100 (when progress > 0)
+      remaining_budget    = total_budget - effective
+      variance            = effective - estimated_cost_used
+      projected_total_cost = (effective / progress) * 100 (when progress > 0)
       deviation_status:
           'over'     if variance > +X% of total_budget
           'under'    if variance < -X% of total_budget
@@ -57,7 +62,7 @@ def compute_cost_estimation(
     effective = actual if actual > ai_inferred else ai_inferred
     estimated_used = _q(total_budget * progress / Decimal("100")) if total_budget else Decimal("0.00")
     remaining = _q(total_budget - effective)
-    variance = _q(actual - estimated_used)
+    variance = _q(effective - estimated_used)
 
     if progress > 0:
         projected_total = _q(effective / progress * Decimal("100"))
