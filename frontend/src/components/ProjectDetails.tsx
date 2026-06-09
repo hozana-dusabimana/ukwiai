@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Brain, CheckCircle2, AlertTriangle, ArrowRight, Award, Upload, MapPin, Sparkles, Building, ImageIcon } from "lucide-react";
+import { Brain, CheckCircle2, AlertTriangle, ArrowRight, Award, Upload, MapPin, Sparkles, Building, ImageIcon, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAuth } from "../auth/AuthContext";
 import { capabilitiesFor } from "../lib/roles";
@@ -79,9 +79,10 @@ interface SiteImage {
 
 interface ProjectDetailsProps {
   projectId: number | null;
+  onDeleted?: () => void;
 }
 
-export default function ProjectDetails({ projectId }: ProjectDetailsProps) {
+export default function ProjectDetails({ projectId, onDeleted }: ProjectDetailsProps) {
   const toast = useToast();
   const { user } = useAuth();
   const caps = capabilitiesFor(user?.role);
@@ -92,6 +93,23 @@ export default function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (projectId == null) return;
+    setDeleting(true);
+    try {
+      await api(`/api/projects/${projectId}`, { method: "DELETE" });
+      toast.success("Project deleted");
+      setConfirmDelete(false);
+      onDeleted?.();
+    } catch (e: any) {
+      toast.error(e.message || "Could not delete project");
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const load = async () => {
     if (projectId == null) {
@@ -138,6 +156,13 @@ export default function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const confCircumference = 2 * Math.PI * 64;
   const confOffset = confCircumference - (confidence / 100) * confCircumference;
 
+  // Who can delete: the project owner may remove it only while it hasn't been
+  // analysed yet (no AI runs on record); admins can always remove it.
+  const isAdmin = user?.role === "admin";
+  const isOwner = user?.id != null && user.id === p.created_by;
+  const hasBeenAnalysed = history.length > 0 || summary.latest_progress != null;
+  const canDelete = isAdmin || (isOwner && !hasBeenAnalysed);
+
   return (
     <div className="space-y-8">
       <header className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
@@ -158,11 +183,18 @@ export default function ProjectDetails({ projectId }: ProjectDetailsProps) {
             }`}>{p.status.replace(/_/g, " ")}</span>
           </div>
         </div>
-        {caps.canUploadImage && (
-          <button onClick={() => setUploadOpen(true)} className="bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs uppercase tracking-wider py-2 px-4 rounded flex items-center gap-1.5 self-start md:self-auto">
-            <Upload className="w-4 h-4" /> Upload site image
-          </button>
-        )}
+        <div className="flex items-center gap-2 self-start md:self-auto">
+          {canDelete && (
+            <button onClick={() => setConfirmDelete(true)} className="border border-red-200 text-red-600 hover:bg-red-50 font-bold text-xs uppercase tracking-wider py-2 px-4 rounded flex items-center gap-1.5">
+              <Trash2 className="w-4 h-4" /> Delete project
+            </button>
+          )}
+          {caps.canUploadImage && (
+            <button onClick={() => setUploadOpen(true)} className="bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs uppercase tracking-wider py-2 px-4 rounded flex items-center gap-1.5">
+              <Upload className="w-4 h-4" /> Upload site image
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="grid grid-cols-12 gap-8">
@@ -337,6 +369,24 @@ export default function ProjectDetails({ projectId }: ProjectDetailsProps) {
       </div>
 
       <UploadImageModal open={uploadOpen} onClose={() => setUploadOpen(false)} projectId={projectId} onUploaded={() => { toast.success("Image uploaded"); load(); }} />
+
+      <Modal
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        title="Delete project"
+        footer={
+          <>
+            <button onClick={() => setConfirmDelete(false)} className="text-xs font-bold uppercase tracking-wider text-gray-500 hover:text-slate-900 px-4 py-2">Cancel</button>
+            <button onClick={handleDelete} disabled={deleting} className="bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white text-xs font-bold uppercase tracking-wider px-4 py-2 rounded flex items-center gap-1.5">
+              <Trash2 className="w-4 h-4" /> {deleting ? "Deleting..." : "Delete permanently"}
+            </button>
+          </>
+        }
+      >
+        <p className="text-sm text-slate-700 leading-relaxed">
+          This permanently removes <span className="font-bold">{p.project_name}</span> ({p.project_code}) and its stages, team and uploads. This cannot be undone.
+        </p>
+      </Modal>
     </div>
   );
 }

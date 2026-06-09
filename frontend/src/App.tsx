@@ -149,6 +149,12 @@ export default function App() {
     loadOverview(scan.projectId ?? selectedProjectId);
   };
 
+  const handleProjectDeleted = () => {
+    setSelectedProjectId(null);
+    setCurrentTab("projects");
+    loadOverview(null);
+  };
+
   const openProject = (id: number) => {
     setSelectedProjectId(id);
     setCurrentTab("project-detail");
@@ -192,7 +198,7 @@ export default function App() {
             />
           )}
           {currentTab === "projects" && <ProjectsList onOpenProject={openProject} />}
-          {currentTab === "project-detail" && <ProjectDetails projectId={selectedProjectId} />}
+          {currentTab === "project-detail" && <ProjectDetails projectId={selectedProjectId} onDeleted={handleProjectDeleted} />}
           {currentTab === "financials" && <Financials defaultProjectId={selectedProjectId} />}
           {currentTab === "site-logs" && <SiteLogs />}
           {currentTab === "reports" && <Reports />}

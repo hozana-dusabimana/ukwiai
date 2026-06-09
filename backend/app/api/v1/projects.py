@@ -138,11 +138,35 @@ def update_project(
 def delete_project(
     project_id: int,
     db: Annotated[Session, Depends(get_db)],
-    user: Annotated[User, Depends(require_manager_or_admin)],
+    user: CurrentUser,
 ):
     p = db.get(Project, project_id)
     if not p:
         raise HTTPException(404, "Project not found")
+
+    # Deletion is owner-scoped: the person who created the project can remove
+    # it, and admins can remove any project. Other managers/engineers cannot.
+    is_admin = user.role == UserRole.admin
+    is_owner = p.created_by == user.id
+    if not (is_admin or is_owner):
+        raise HTTPException(403, "Only the project owner or an administrator can delete this project.")
+
+    # The owner may only delete a project that hasn't been analysed yet. Once an
+    # AI scan has run there is real progress/cost history we don't want a single
+    # click to wipe; an admin can still force-delete for clean-up.
+    if not is_admin:
+        analysed = db.scalar(
+            select(func.count())
+            .select_from(ProgressAnalysis)
+            .where(ProgressAnalysis.project_id == p.id)
+        ) or 0
+        if analysed:
+            raise HTTPException(
+                409,
+                "This project has already been analysed and can no longer be deleted. "
+                "Ask an administrator if it really needs to be removed.",
+            )
+
     db.delete(p)
     log_action(db, user.id, "project.delete", "project", project_id)
     db.commit()
