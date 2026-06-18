@@ -28,6 +28,48 @@ def test_invalid_image_rejected(client, auth_headers):
     assert r.status_code == 400
 
 
+def test_site_background_sets_terrain(client, auth_headers, png_bytes):
+    """Uploading the site background assesses terrain and stores the multiplier."""
+    p = _make_project(client, auth_headers)
+    files = {"file": ("plot.png", png_bytes, "image/png")}
+    r = client.post(f"/api/projects/{p['id']}/site-background", headers=auth_headers, files=files)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert float(body["terrain_difficulty"]) == 1.25  # from fake assess_terrain
+    assert body["terrain_assessment"]["difficulty_label"] == "hard"
+    # and it is now readable on the project
+    pr = client.get(f"/api/projects/{p['id']}", headers=auth_headers).json()
+    assert float(pr["terrain_difficulty"]) == 1.25
+
+
+def test_predicted_cost_can_exceed_budget(client, auth_headers, png_bytes):
+    """The market-priced prediction is independent of the plan and can exceed it."""
+    # Tiny budget so the market bill obviously overruns the per-stage allocation.
+    p = _make_project(client, auth_headers)  # budget = 1,000,000
+    img = client.post(
+        f"/api/projects/{p['id']}/images/upload", headers=auth_headers,
+        files={"file": ("court.png", png_bytes, "image/png")},
+    ).json()
+    r = client.post("/api/ai/analyze-image", headers=auth_headers, data={"image_id": str(img["id"])})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # Response carries the material-aware, market-priced prediction.
+    assert body["cost_prediction"]["currency"] == "RWF"
+    assert body["materials_visible"]
+    assert body["predicted_stage_cost"]["total"] > 0
+
+    # The breakdown's predicted spend for stage 1 exceeds its small allocation.
+    bd = client.get(f"/api/projects/{p['id']}/budget/breakdown", headers=auth_headers).json()
+    stage1 = next(row for row in bd if "Clearing" in row["stage_name"])
+    assert stage1["ai_predicted_cost"] > stage1["allocated_budget"]
+    assert stage1["over_budget"] is True
+
+    # Summary surfaces the predicted total and it drives the effective spend.
+    summ = client.get(f"/api/projects/{p['id']}/budget/summary", headers=auth_headers).json()
+    assert float(summ["total_ai_predicted_cost"]) > 0
+    assert float(summ["effective_total_spent"]) == float(summ["total_ai_predicted_cost"])
+
+
 def test_predict_stage_stateless(client, auth_headers, png_bytes):
     files = {"file": ("test.png", png_bytes, "image/png")}
     r = client.post("/api/ai/predict-stage", headers=auth_headers, files=files)
@@ -41,7 +83,7 @@ def test_non_basketball_image_rejected(client, auth_headers, png_bytes, monkeypa
 
     p = _make_project(client, auth_headers)
 
-    async def fake_predict(image_bytes, filename="image.jpg"):
+    async def fake_predict(image_bytes, filename="image.jpg", **kwargs):
         return {
             "predicted_stage": "Site Clearing & Excavation",
             "predicted_progress": 5.0,
@@ -79,7 +121,7 @@ def test_completed_stage_rejected(client, auth_headers, db_session, png_bytes, m
     row.status = ProjectStageStatus.completed
     db_session.commit()
 
-    async def fake_predict(image_bytes, filename="image.jpg"):
+    async def fake_predict(image_bytes, filename="image.jpg", **kwargs):
         return {
             "predicted_stage": "Site Clearing & Excavation",
             "predicted_progress": 5.0,

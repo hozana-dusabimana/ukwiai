@@ -15,6 +15,11 @@ export interface ScanHistory {
   remainingBudget: string;
   projectedVariance: string;
   varianceStatus: 'ON TRACK' | 'CRITICAL' | 'WARNING';
+  // Material-aware, market-priced prediction surfaced from the AI analysis.
+  materials?: string[];
+  predictedStageCost?: string;
+  predictedStageCostBand?: string;
+  terrainNote?: string;
 }
 
 export interface SystemService {

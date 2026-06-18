@@ -256,13 +256,24 @@ app.post("/api/analyze", async (req, res) => {
     const progress = Math.round(a.predicted_progress_percentage ?? 0);
     const confidence = Number(((a.confidence_score ?? 0) * 100).toFixed(1));
     const totalBudget = Number(analysis.project_total_budget ?? 0);
-    // "Consumed so far" = AI-estimated cost used at the detected progress. Falls
-    // back to the projected total only if the estimate is missing. (Previously
-    // this read projected_total_cost, which is 0 until expenses are logged — so
-    // the tile always showed RWF 0 even on a near-complete project.)
-    const estimated = Number(cost.estimated_cost_used ?? cost.projected_total_cost ?? 0);
-    const overBudget = estimated > totalBudget && totalBudget > 0;
-    const remaining = Math.max(0, totalBudget - estimated);
+    // "Consumed so far" = the AI's MARKET-PRICED prediction of spend at the
+    // detected progress (material BOM × terrain × market), not a slice of the
+    // plan. effective = estimated_used + variance (the backend's max(recorded,
+    // predicted) − the plan slice + the plan slice). This is what lets the tile
+    // legitimately show a figure ABOVE the budget on a hard site / hot market.
+    const estimatedUsed = Number(cost.estimated_cost_used ?? 0);
+    const variance = Number(cost.variance ?? 0);
+    // variance = effective − estimated_used, so effective spend = the sum.
+    const predictedSpent = Math.max(0, estimatedUsed + variance);
+    const overBudget = predictedSpent > totalBudget && totalBudget > 0;
+    const remaining = totalBudget - predictedSpent; // may be negative when over
+
+    // Material-aware, market-priced detail for this stage.
+    const cp = analysis.cost_prediction || {};
+    const psc = analysis.predicted_stage_cost || null;
+    const materials: string[] = Array.isArray(analysis.materials_visible) ? analysis.materials_visible : [];
+    const terrainMult = Number(cp.terrain_multiplier ?? 1);
+    const marketIdx = Number(cp.market_index ?? 1);
 
     const scanRecord = {
       id: `scan-${Date.now()}`,
@@ -275,10 +286,16 @@ app.post("/api/analyze", async (req, res) => {
       stageName: a.predicted_stage || "Unknown stage",
       confidence,
       advisory: analysis.advice || analysis.summary || "AI advisory unavailable.",
-      budgetConsumed: formatRwf(estimated),
-      remainingBudget: formatRwf(remaining),
-      projectedVariance: overBudget ? `+${formatRwf(estimated - totalBudget)}` : `${formatRwf(remaining)} remaining`,
+      budgetConsumed: formatRwf(predictedSpent),
+      remainingBudget: remaining >= 0 ? formatRwf(remaining) : `−${formatRwf(Math.abs(remaining))}`,
+      projectedVariance: overBudget ? `+${formatRwf(predictedSpent - totalBudget)} over budget` : `${formatRwf(Math.max(0, remaining))} remaining`,
       varianceStatus: overBudget ? "CRITICAL" : "ON TRACK",
+      materials,
+      predictedStageCost: psc ? formatRwf(Number(psc.total ?? 0)) : undefined,
+      predictedStageCostBand: psc ? `${formatRwf(Number(psc.total_low ?? 0))} – ${formatRwf(Number(psc.total_high ?? 0))}` : undefined,
+      terrainNote: (terrainMult !== 1 || marketIdx !== 1)
+        ? `Terrain ×${terrainMult.toFixed(2)} · market ×${marketIdx.toFixed(2)}`
+        : undefined,
     };
 
     res.json({ scan: scanRecord, raw: analysis });

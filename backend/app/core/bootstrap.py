@@ -97,21 +97,33 @@ def _add_missing_columns(conn) -> None:
     Each block must check existence first so it stays idempotent across restarts.
     """
     is_mysql = not settings.database_url.startswith("sqlite")
+    json_type = "JSON" if is_mysql else "TEXT"
 
-    if is_mysql:
-        existing = {row[0] for row in conn.execute(text(
-            "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
-            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'project_stages'"
-        )).all()}
-    else:
-        existing = {row[1] for row in conn.execute(text("PRAGMA table_info(project_stages)")).all()}
+    def cols(table: str) -> set[str]:
+        if is_mysql:
+            return {row[0] for row in conn.execute(text(
+                "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t"
+            ), {"t": table}).all()}
+        return {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})")).all()}
 
-    if "ai_inferred_cost" not in existing:
-        conn.execute(text(
-            "ALTER TABLE project_stages "
-            "ADD COLUMN ai_inferred_cost DECIMAL(15,2) NOT NULL DEFAULT 0"
-        ))
-        logger.info("Added column project_stages.ai_inferred_cost")
+    def add(table: str, column: str, ddl: str, existing: set[str]) -> None:
+        if column not in existing:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+            logger.info("Added column %s.%s", table, column)
+
+    ps_cols = cols("project_stages")
+    add("project_stages", "ai_inferred_cost", "DECIMAL(15,2) NOT NULL DEFAULT 0", ps_cols)
+    # Market-priced per-stage prediction (can exceed the planned allocation).
+    add("project_stages", "ai_predicted_cost", "DECIMAL(15,2) NOT NULL DEFAULT 0", ps_cols)
+
+    # Site terrain + background photo, assessed at project setup.
+    pr_cols = cols("projects")
+    add("projects", "site_background_image_path", "VARCHAR(500) NULL", pr_cols)
+    add("projects", "site_background_image_url", "VARCHAR(500) NULL", pr_cols)
+    add("projects", "terrain_difficulty", "DECIMAL(5,3) NOT NULL DEFAULT 1.000", pr_cols)
+    add("projects", "terrain_assessment", f"{json_type} NULL", pr_cols)
+    add("projects", "terrain_assessed_at", "DATETIME NULL", pr_cols)
 
 
 def _create_tables() -> None:

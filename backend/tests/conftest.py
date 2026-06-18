@@ -63,19 +63,59 @@ class _FakeAIClient:
     async def model_info(self):
         return {"model_version": "test-1.0", "input_size": 224, "num_classes": 7, "stages": [], "using_fallback": True}
 
-    async def predict(self, image_bytes, filename="image.jpg"):
+    async def predict(self, image_bytes, filename="image.jpg", *, area_m2=None,
+                      perimeter_m=None, terrain_multiplier=1.0, market_index=None):
+        # Minimal but realistic market-priced bill so cost-prediction roll-up has
+        # data to work with. Stage totals scale with the terrain multiplier so
+        # tests can prove a hard site predicts a higher cost.
+        tmul = float(terrain_multiplier or 1.0)
+        base_totals = [4_000_000, 5_300_000, 20_700_000, 9_500_000, 2_400_000, 4_100_000, 9_200_000]
+        names = [
+            "Site Clearing & Excavation", "Sub-base Preparation", "Base Layer / Concrete Slab",
+            "Surface Finishing (Asphalt/Acrylic)", "Court Line Marking & Painting",
+            "Hoops & Backboards Installation", "Fencing & Final Touches",
+        ]
+        per_stage = [
+            {"stage_order": i + 1, "stage_name": names[i], "materials": [],
+             "subtotal": base_totals[i], "terrain_multiplier": tmul,
+             "total": round(base_totals[i] * tmul, 2),
+             "total_low": round(base_totals[i] * tmul * 0.85, 2),
+             "total_high": round(base_totals[i] * tmul * 1.15, 2)}
+            for i in range(7)
+        ]
+        cost_prediction = {
+            "currency": "RWF", "area_m2": area_m2 or 608, "perimeter_m": perimeter_m or 102,
+            "terrain_multiplier": tmul, "market_index": market_index or 1.0,
+            "per_stage": per_stage,
+            "project_total": round(sum(s["total"] for s in per_stage), 2),
+            "project_total_low": round(sum(s["total_low"] for s in per_stage), 2),
+            "project_total_high": round(sum(s["total_high"] for s in per_stage), 2),
+        }
         return {
             "predicted_stage": "Site Clearing & Excavation",
             "predicted_stage_order": 1,
             "predicted_progress": 5.0,
             "confidence": 0.91,
+            "is_basketball_court": True,
             "model_version": "test-1.0",
             "processing_time_ms": 17,
+            "materials_visible": ["Exposed soil / bare ground"],
+            "cost_prediction": cost_prediction,
+            "predicted_stage_cost": per_stage[0],
             "raw_predictions": {"stage_1": 0.91, "stage_2": 0.05},
         }
 
     async def predict_batch(self, payload):
         return [await self.predict(b, name) for name, b in payload]
+
+    async def assess_terrain(self, image_bytes, filename="site.jpg"):
+        return {
+            "difficulty_multiplier": 1.25,
+            "difficulty_score": 0.42,
+            "difficulty_label": "hard",
+            "factors": {"vegetation": 0.5, "roughness": 0.4, "slope": 0.3, "wetness": 0.1},
+            "summary": "Terrain assessed as hard (×1.25).",
+        }
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -85,8 +125,10 @@ def _patch_ai_client():
     # Patch the symbol already imported into the routers
     from app.api.v1 import ai as ai_router_module
     from app.api.v1 import system as system_router_module
+    from app.api.v1 import projects as projects_router_module
     ai_router_module.ai_client = fake
     system_router_module.ai_client = fake
+    projects_router_module.ai_client = fake
     yield
 
 

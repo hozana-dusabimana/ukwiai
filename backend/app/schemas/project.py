@@ -48,6 +48,20 @@ class ProjectOut(ProjectBase):
     created_by: int
     created_at: datetime
     updated_at: datetime
+    # Site terrain (assessed from the background photo at setup)
+    site_background_image_url: str | None = None
+    terrain_difficulty: Decimal = Decimal("1.000")
+    terrain_assessment: dict | None = None
+    terrain_assessed_at: datetime | None = None
+
+
+class TerrainAssessmentOut(BaseModel):
+    """Result of analysing a site-background photo at project setup."""
+    project_id: int
+    site_background_image_url: str | None = None
+    terrain_difficulty: Decimal
+    terrain_assessment: dict | None = None
+    terrain_assessed_at: datetime | None = None
 
 
 class ProjectSummary(BaseModel):
@@ -55,7 +69,9 @@ class ProjectSummary(BaseModel):
     total_expenses: Decimal
     # AI-derived: refreshed on each /api/ai/analyze-image. Zero until first analysis.
     total_ai_inferred_cost: Decimal = Decimal("0")
-    # Effective = max(recorded, ai). Use this in UI cards.
+    # AI market-priced prediction (material BOM × terrain × market). Can exceed budget.
+    total_ai_predicted_cost: Decimal = Decimal("0")
+    # Effective = max(recorded, ai_predicted). Use this in UI cards.
     effective_total_spent: Decimal = Decimal("0")
     latest_progress: float | None
     latest_confidence: float | None

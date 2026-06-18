@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     BUDGET_OVERRUN_PERCENT: float = 5.0
     DELAY_ALERT_DAYS: int = 7
 
+    # Market index applied to AI material-cost predictions (regional cost of
+    # living / inflation / FX). 1.0 = reference Kigali prices. Forwarded to the
+    # AI service so the same site re-priced later tracks the live market.
+    AI_MARKET_INDEX: float = 1.0
+
     @property
     def database_url(self) -> str:
         return (

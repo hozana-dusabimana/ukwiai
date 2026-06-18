@@ -1,12 +1,16 @@
 # Models
 
-The AI service uses three prediction layers. This document describes each one: what it is, how it is used, whether **we** trained it (and how), and why it was chosen over the alternatives.
+The AI service uses three prediction layers plus a cost-prediction engine. This document describes each one: what it is, how it is used, whether **we** trained it (and how), and why it was chosen over the alternatives.
 
 | # | Model | Role | Trained by us? |
 |---|-------|------|----------------|
 | 1 | MobileNetV2 two-headed CNN | Main stage classifier + progress regressor | **Yes** — transfer-learned in-house on our own synthetic dataset (ImageNet-pretrained backbone, frozen) |
 | 2 | OWLv2 (`google/owlv2-base-patch16-ensemble`) | Zero-shot detection of court structures (backboards, fences, poles) + photo relevance gate | No — used pretrained, zero-shot by design (no training needed or performed) |
 | 3 | OpenCV heuristic fallback | Keeps the service functional when no trained model is available | N/A — hand-coded rules, not a learned model |
+| 4 | Material BOM + market-price cost engine | Predicts the **actual market cost** of each stage from materials, terrain & market — independent of the planning budget | N/A — deterministic, auditable engine (no labelled-cost dataset exists; see below) |
+| 5 | OpenCV terrain analyzer | Scores a site-background photo into a difficulty multiplier that inflates terrain-sensitive stage costs | N/A — hand-coded CV heuristic |
+
+> **Cost prediction (layers 4–5).** Layers 1–3 answer *"what stage is this and how far along?"*. Layers 4–5 answer *"what does that actually cost here?"* — pricing a bill of materials (scaled to the court geometry) at live market prices and inflating it by the site's terrain difficulty. The result is **not** pegged to the budget typed in at planning: a hard site or a hot market predicts a cost above the plan, which is exactly what drives the over-budget alerts. See section 4 below.
 
 ---
 
@@ -126,6 +130,49 @@ Responses then carry a `model_version` ending in `-fallback`.
 ### Why have it at all
 
 It guarantees the service is never down for lack of a model file: tests run without weights, fresh deployments work immediately, and a bad training run can't silently ship garbage predictions.
+
+---
+
+## 4. Material BOM + market-price cost engine — *deterministic (not trained)*
+
+**Files:** [`ai_service/app/cost_model.py`](ai_service/app/cost_model.py) (bill of materials), [`ai_service/app/market_prices.py`](ai_service/app/market_prices.py) (market unit prices), [`ai_service/app/terrain.py`](ai_service/app/terrain.py) (terrain difficulty).
+
+### What it is
+
+Given the detected stage, the court geometry, the site's terrain difficulty and a market index, the engine builds a fully itemised, market-priced cost for **every** stage:
+
+```
+quantity (court area / perimeter)
+  × market unit price (market_prices, scaled by market_index)
+  = line total
+Σ line totals + labour  = stage subtotal
+  × effective terrain multiplier (per-stage terrain sensitivity)
+  = stage total          ──►  with a low/high band from material volatility
+```
+
+The bill is **independent of the planning budget** — so a stage's predicted cost can come out *above* its planned allocation when the materials, terrain or market say so. That overrun is what drives the over-budget alerts. Each material reports a low/expected/high band so the market's natural price variation shows as a range, and a single `AI_MARKET_INDEX` (regional cost-of-living / inflation / FX) re-prices the whole catalogue.
+
+### How it is used
+
+`POST /predict` accepts `area_m2`, `perimeter_m`, `terrain_multiplier` and `market_index` form fields (the backend fills them from the project: court dimensions, the terrain assessed at setup, and config). The response gains `materials_visible`, a full `cost_prediction` bill, and the `predicted_stage_cost` for the detected stage. The backend rolls the per-stage market totals into `project_stages.ai_predicted_cost`, which feeds the variance/deviation engine and the dashboards.
+
+### Why a BOM engine and not a trained cost regressor
+
+No labelled cost dataset exists for this project, and one would be expensive and contentious to build. A deterministic BOM keyed on real market prices is **explainable** (a site engineer can read the bill and see why a stage costs what it does), **auditable**, and **trivially tunable** — the prices live in one table and can be swapped for a live feed. A black-box price regressor would be neither, and is far harder to defend in a final-year review.
+
+---
+
+## 5. OpenCV terrain analyzer — *deterministic (not trained)*
+
+**File:** [`ai_service/app/terrain.py`](ai_service/app/terrain.py)
+
+### What it is
+
+At project setup the user uploads a photo of the raw plot. `POST /assess-terrain` scores it on four readable signals — **vegetation** (green coverage → clearing), **roughness** (texture energy → rocky excavation), **slope** (vertical intensity gradient + horizon tilt → cut/fill) and **wetness** (dark/blue low-lying patches → drainage) — into a difficulty multiplier in ≈[0.85, 1.80]. The backend stores it on the project and the cost engine applies it per stage, weighted by each stage's terrain sensitivity (earthworks suffer most; painting barely cares).
+
+### Why a heuristic
+
+There is no "how hard is this plot" training set, and the signals (greenery, rockiness, slope, water) are directly measurable with classical CV. The multiplier is clamped server-side so a pathological photo can't produce a runaway cost.
 
 ---
 

@@ -43,6 +43,12 @@ class ProjectStage(Base):
     # an accountant logs real BudgetRecord rows. Kept separate from actual_cost so that
     # recorded expenses (additive) and AI inference (overwritten each run) don't fight.
     ai_inferred_cost: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=Decimal("0"), nullable=False)
+    # Market-priced prediction of what this stage actually costs to build at this
+    # site — material BOM × market index × terrain difficulty, rolled up to the
+    # stage's current progress. Unlike `allocated_budget` (the plan) and
+    # `ai_inferred_cost` (a % of the plan), this is grounded in real material
+    # prices and CAN exceed the planned allocation. Drives over-budget alerts.
+    ai_predicted_cost: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=Decimal("0"), nullable=False)
     status: Mapped[ProjectStageStatus] = mapped_column(
         SAEnum(ProjectStageStatus, native_enum=False, length=20),
         default=ProjectStageStatus.not_started,

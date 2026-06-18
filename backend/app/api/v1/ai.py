@@ -21,6 +21,7 @@ from app.services.cost_estimation import (
     compute_cost_estimation,
     apply_ai_inferred_progress,
     find_project_stage,
+    project_cost_context,
 )
 from app.services.alerts import (
     evaluate_cost_alerts,
@@ -86,9 +87,18 @@ async def analyze_image(
     if proj is None:
         raise HTTPException(404, "Project not found")
 
+    # Cost context: the court geometry, the terrain difficulty assessed from the
+    # site background photo at setup, and the configured market index. This is
+    # what lets the AI price the bill of materials for THIS site so the result
+    # can exceed the planned budget on hard ground or in a hot market.
+    ctx = project_cost_context(proj)
     t0 = time.perf_counter()
     try:
-        ai_resp = await ai_client.predict(img_bytes, filename=filename)
+        ai_resp = await ai_client.predict(
+            img_bytes, filename=filename,
+            area_m2=ctx["area_m2"], perimeter_m=ctx["perimeter_m"],
+            terrain_multiplier=ctx["terrain_multiplier"], market_index=ctx["market_index"],
+        )
     except AIServiceError as exc:
         raise HTTPException(status_code=503, detail=f"AI service unavailable: {exc}")
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -155,11 +165,17 @@ async def analyze_image(
     # breakdown and timeline reflect what the camera saw, even before an
     # accountant logs real BudgetRecord rows. The cost estimation below then
     # rolls those AI-inferred per-stage costs into "spend so far".
+    cost_prediction = ai_resp.get("cost_prediction") or {}
+    per_stage_market = {
+        s["stage_order"]: s.get("total", 0)
+        for s in cost_prediction.get("per_stage", [])
+    }
     apply_ai_inferred_progress(
         db,
         proj.id,
         analysis.predicted_stage,
         analysis.predicted_progress_percentage,
+        per_stage_market=per_stage_market,
     )
 
     estimation = compute_cost_estimation(db, proj, analysis.predicted_progress_percentage, image=image)
@@ -181,6 +197,9 @@ async def analyze_image(
         advice=ai_resp.get("advice"),
         next_stage=ai_resp.get("next_stage"),
         confidence_label=ai_resp.get("confidence_label"),
+        materials_visible=ai_resp.get("materials_visible") or [],
+        cost_prediction=cost_prediction or None,
+        predicted_stage_cost=ai_resp.get("predicted_stage_cost"),
     )
 
 

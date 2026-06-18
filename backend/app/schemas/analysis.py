@@ -31,3 +31,8 @@ class AnalyzeResponse(BaseModel):
     advice: str | None = None
     next_stage: str | None = None
     confidence_label: str | None = None
+    # Material-aware, market-priced cost prediction for this site (independent of
+    # the planning budget — a stage's predicted cost can exceed its allocation).
+    materials_visible: list[str] = []
+    cost_prediction: dict | None = None
+    predicted_stage_cost: dict | None = None

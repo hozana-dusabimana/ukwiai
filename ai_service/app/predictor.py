@@ -20,6 +20,7 @@ import numpy as np
 from .preprocessing import preprocess, decode_image
 from .stages import STAGES, stage_for_index, NUM_CLASSES
 from .object_detection import detect_court_structures, summarize_detections
+from .cost_model import estimate_costs, detected_materials
 
 logger = logging.getLogger("ai-predictor")
 _LOCK = threading.Lock()
@@ -176,7 +177,15 @@ class Predictor:
             self._using_fallback = True
 
     # ----------------- public prediction entry points -----------------
-    def predict(self, image_bytes: bytes) -> dict[str, Any]:
+    def predict(
+        self,
+        image_bytes: bytes,
+        *,
+        area_m2: float | None = None,
+        perimeter_m: float | None = None,
+        terrain_multiplier: float = 1.0,
+        market_index: float | None = None,
+    ) -> dict[str, Any]:
         self._load_model_if_needed()
         t0 = time.perf_counter()
         if self._model is not None:
@@ -213,6 +222,25 @@ class Predictor:
         summary, advice = _human_summary(stage, progress, confidence, next_stage,
                                           using_fallback=self._using_fallback)
 
+        # ----- material-aware, market-priced cost prediction -----
+        # The visible-materials list comes from the heuristic feature flags when
+        # available; the bill is computed from the BOM engine for the court
+        # geometry, the site terrain difficulty, and the current market index —
+        # so a stage's predicted cost is free to exceed its planned budget.
+        features = raw.get("features") if isinstance(raw, dict) else None
+        materials_visible = detected_materials(features)
+        cost_prediction = estimate_costs(
+            area_m2=area_m2,
+            perimeter_m=perimeter_m,
+            terrain_multiplier=terrain_multiplier,
+            market_index=market_index,
+            detected=features or {},
+        )
+        predicted_stage_cost = next(
+            (s for s in cost_prediction["per_stage"] if s["stage_order"] == stage.order),
+            None,
+        )
+
         return {
             "predicted_stage": stage.name,
             "predicted_stage_order": stage.order,
@@ -224,6 +252,9 @@ class Predictor:
             "summary": summary,
             "advice": advice,
             "next_stage": next_stage.name if next_stage else None,
+            "materials_visible": materials_visible,
+            "cost_prediction": cost_prediction,
+            "predicted_stage_cost": predicted_stage_cost,
             "model_version": self.model_version + ("-fallback" if self._using_fallback else ""),
             "processing_time_ms": elapsed_ms,
             "raw_predictions": raw,

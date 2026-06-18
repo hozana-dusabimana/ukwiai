@@ -13,7 +13,9 @@ from app.models.user import User
 from app.schemas.budget import ExpenseCreate, ExpenseUpdate, ExpenseOut, BudgetSummary
 from app.services.audit import log_action
 from app.services.access import user_can_access
-from app.services.cost_estimation import total_recorded_expenses, total_ai_inferred_cost
+from app.services.cost_estimation import (
+    total_recorded_expenses, total_ai_inferred_cost, total_ai_predicted_cost,
+)
 
 router = APIRouter(tags=["budget"])
 
@@ -136,6 +138,7 @@ def budget_summary(project_id: int, db: Annotated[Session, Depends(get_db)], use
     p = _load_project_or_403(db, project_id, user)
     spent = total_recorded_expenses(db, project_id)
     ai_spent = total_ai_inferred_cost(db, project_id)
+    ai_predicted = total_ai_predicted_cost(db, project_id)
     by_cat_rows = db.execute(
         select(BudgetRecord.expense_category, func.coalesce(func.sum(BudgetRecord.amount), 0))
         .where(BudgetRecord.project_id == project_id)
@@ -153,9 +156,10 @@ def budget_summary(project_id: int, db: Annotated[Session, Depends(get_db)], use
     by_stage = {(name or "unassigned"): Decimal(str(amt or 0)) for name, amt in by_stage_rows}
 
     total_budget = Decimal(str(p.total_budget or 0))
-    # effective_total_spent = max of recorded vs AI-inferred (recorded always wins
-    # if present because it's ground truth; AI fills the gap when nothing is logged).
-    effective = spent if spent > ai_spent else ai_spent
+    # effective_total_spent = max of recorded vs AI market-prediction (recorded
+    # always wins if present because it's ground truth; the market prediction —
+    # which can exceed the budget — fills the gap when nothing is logged).
+    effective = spent if spent > ai_predicted else ai_predicted
     return BudgetSummary(
         total_budget=total_budget,
         total_spent=spent,
@@ -164,6 +168,7 @@ def budget_summary(project_id: int, db: Annotated[Session, Depends(get_db)], use
         by_category=by_cat,
         by_stage=by_stage,
         total_ai_inferred_cost=ai_spent,
+        total_ai_predicted_cost=ai_predicted,
         effective_total_spent=effective,
         effective_spent_percent=float(effective) / float(total_budget) * 100 if total_budget else 0.0,
         effective_remaining=total_budget - effective,
@@ -187,6 +192,7 @@ def breakdown(project_id: int, db: Annotated[Session, Depends(get_db)], user: Cu
             ProjectStage.allocated_budget,
             ProjectStage.actual_cost,
             ProjectStage.ai_inferred_cost,
+            ProjectStage.ai_predicted_cost,
             ProjectStage.status,
         )
         .join(ConstructionStage, ProjectStage.stage_id == ConstructionStage.id)
@@ -194,19 +200,23 @@ def breakdown(project_id: int, db: Annotated[Session, Depends(get_db)], user: Cu
         .order_by(ConstructionStage.stage_order)
     ).all()
     out = []
-    for name, allocated, actual, ai_cost, st in rows:
+    for name, allocated, actual, ai_cost, ai_pred, st in rows:
         alloc_v = float(allocated or 0)
         actual_v = float(actual or 0)
         ai_v = float(ai_cost or 0)
-        # effective_spent = whichever is larger (recorded expense overrides AI estimate)
-        effective = max(actual_v, ai_v)
+        ai_pred_v = float(ai_pred or 0)
+        # effective_spent = recorded expense if present, else the AI market
+        # prediction (which can exceed the allocation on hard ground / hot market).
+        effective = max(actual_v, ai_pred_v)
         out.append({
             "stage_name": name,
             "allocated_budget": alloc_v,
             "actual_cost": actual_v,
             "ai_inferred_cost": ai_v,
+            "ai_predicted_cost": ai_pred_v,
             "effective_spent": effective,
             "remaining": alloc_v - effective,
+            "over_budget": effective > alloc_v,
             "status": st.value if st else None,
         })
     return out

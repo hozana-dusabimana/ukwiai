@@ -152,6 +152,9 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [bgFile, setBgFile] = useState<File | null>(null);
+  const [bgPreview, setBgPreview] = useState<string | null>(null);
+  const [step, setStep] = useState<string | null>(null);
 
   const reset = () => {
     setForm({
@@ -161,13 +164,27 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
       expected_end_date: "", description: "",
     });
     setError(null);
+    setBgFile(null);
+    setBgPreview(null);
+    setStep(null);
+  };
+
+  const pickBg = (f: File | null) => {
+    setBgFile(f);
+    setBgPreview(f ? URL.createObjectURL(f) : null);
   };
 
   const submit = async () => {
+    if (!bgFile) {
+      setError("A site-background photo is required so the AI can assess the terrain and predict costs.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
-      await api("/api/projects", {
+      // 1) Create the project.
+      setStep("Creating project…");
+      const created = await api<{ id: number }>("/api/projects", {
         method: "POST",
         body: {
           ...form,
@@ -176,6 +193,17 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
           expected_end_date: form.expected_end_date ? new Date(form.expected_end_date).toISOString() : undefined,
         },
       });
+      // 2) Upload the site background and assess terrain difficulty.
+      setStep("Analysing site terrain…");
+      const fd = new FormData();
+      fd.append("file", bgFile);
+      const terrain = await api<{ terrain_assessment?: { difficulty_label?: string }; terrain_difficulty?: number }>(
+        `/api/projects/${created.id}/site-background`,
+        { method: "POST", body: fd }
+      );
+      const label = terrain?.terrain_assessment?.difficulty_label;
+      const mult = terrain?.terrain_difficulty;
+      if (label) setStep(`Terrain assessed: ${label} (×${mult}). Cost predictions will reflect this.`);
       onCreated();
       reset();
       onClose();
@@ -194,13 +222,14 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
       footer={
         <>
           <button onClick={() => { reset(); onClose(); }} className="text-xs font-bold uppercase tracking-wider text-gray-500 hover:text-slate-900 px-4 py-2">Cancel</button>
-          <button onClick={submit} disabled={submitting || !form.project_name || !form.project_code} className="bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-bold uppercase tracking-wider px-4 py-2 rounded">
-            {submitting ? "Creating..." : "Create project"}
+          <button onClick={submit} disabled={submitting || !form.project_name || !form.project_code || !bgFile} className="bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-bold uppercase tracking-wider px-4 py-2 rounded">
+            {submitting ? (step || "Creating...") : "Create project"}
           </button>
         </>
       }
     >
       {error && <InlineError message={error} />}
+      {!error && step && submitting && <div className="text-xs font-semibold text-orange-700 mb-2">{step}</div>}
       <Field label="Project name *"><input required value={form.project_name} onChange={(e) => setForm((f) => ({ ...f, project_name: e.target.value }))} className="w-full bg-transparent outline-none text-sm" placeholder="Kigali Arena Court B" /></Field>
       <Field label="Project code *"><input required value={form.project_code} onChange={(e) => setForm((f) => ({ ...f, project_code: e.target.value }))} className="w-full bg-transparent outline-none text-sm" placeholder="KGL-2026-04" /></Field>
       <Field label="Location"><input value={form.location} onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))} className="w-full bg-transparent outline-none text-sm" placeholder="Gasabo District" /></Field>
@@ -217,6 +246,23 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
         <Field label="Expected end"><input type="date" value={form.expected_end_date} onChange={(e) => setForm((f) => ({ ...f, expected_end_date: e.target.value }))} className="w-full bg-transparent outline-none text-sm" /></Field>
       </div>
       <Field label="Description"><textarea value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} className="w-full bg-transparent outline-none text-sm h-20 resize-none" placeholder="Court purpose, special requirements..." /></Field>
+      <label className="block">
+        <span className="block text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-1.5">Site background photo *</span>
+        <div className="bg-gray-50 border border-dashed border-gray-300 px-3 py-3 rounded">
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/jpg,image/webp"
+            onChange={(e) => pickBg(e.target.files?.[0] || null)}
+            className="w-full text-xs file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-orange-600 file:text-white file:text-xs file:font-bold file:uppercase file:tracking-wider hover:file:bg-orange-700"
+          />
+          {bgPreview && <img src={bgPreview} alt="site background" className="mt-2 h-28 w-full object-cover rounded" />}
+          <p className="mt-2 text-[11px] text-gray-500 leading-snug">
+            Upload a photo of the raw plot where the court will be built. The AI scores the terrain
+            (slope, rock, vegetation, drainage) into a difficulty multiplier — hard ground predicts a
+            higher cost than a flat site at the same budget.
+          </p>
+        </div>
+      </label>
     </Modal>
   );
 }

@@ -41,9 +41,13 @@ class BudgetSummary(BaseModel):
     spent_percent: float
     by_category: dict[str, Decimal]
     by_stage: dict[str, Decimal]
-    # AI-inferred spend (sum of project_stages.ai_inferred_cost). Refreshed
-    # by /api/ai/analyze-image; zero until the first analysis runs.
+    # AI-inferred spend (sum of project_stages.ai_inferred_cost) — a slice of the
+    # plan. Refreshed by /api/ai/analyze-image; zero until the first analysis.
     total_ai_inferred_cost: Decimal = Decimal("0")
+    # AI market-priced prediction (sum of project_stages.ai_predicted_cost) —
+    # grounded in real material prices + terrain + market, so it CAN exceed the
+    # budget. This is what drives the effective spend and over-budget status.
+    total_ai_predicted_cost: Decimal = Decimal("0")
     effective_total_spent: Decimal = Decimal("0")
     effective_spent_percent: float = 0.0
     effective_remaining: Decimal = Decimal("0")

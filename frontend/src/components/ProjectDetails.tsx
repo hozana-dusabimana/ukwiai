@@ -46,12 +46,15 @@ interface TimelineRow {
   allocated_budget: number;
   actual_cost: number;
   ai_inferred_cost?: number;
+  ai_predicted_cost?: number;
   effective_spent?: number;
   status: string;
 }
 interface Summary {
   project: Project;
   total_expenses: number | string;
+  total_ai_predicted_cost?: number | string;
+  effective_total_spent?: number | string;
   latest_progress: number | null;
   latest_confidence: number | null;
   deviation_status: string | null;
@@ -149,9 +152,14 @@ export default function ProjectDetails({ projectId, onDeleted }: ProjectDetailsP
   const progress = Math.round(summary.latest_progress ?? 0);
   const confidence = Number(((summary.latest_confidence ?? 0) * 100).toFixed(1));
   const featuredImage = images[0];
-  const totalSpent = Number(summary.total_expenses) || 0;
+  // Headline spend = the effective figure (recorded expenses, or the AI's
+  // market-priced prediction when nothing is logged). Because the prediction is
+  // grounded in materials + terrain + market, it can exceed the planned budget.
+  const totalSpent = Number(summary.effective_total_spent ?? summary.total_expenses) || 0;
   const totalBudget = Number(p.total_budget) || 0;
   const overBudget = totalSpent > totalBudget;
+  const terrainLabel = (p as any).terrain_assessment?.difficulty_label as string | undefined;
+  const terrainMult = Number((p as any).terrain_difficulty ?? 1);
 
   const confCircumference = 2 * Math.PI * 64;
   const confOffset = confCircumference - (confidence / 100) * confCircumference;
@@ -176,6 +184,19 @@ export default function ProjectDetails({ projectId, onDeleted }: ProjectDetailsP
           <div className="flex items-center gap-3 text-xs text-gray-500 mt-1 flex-wrap">
             <span className="flex items-center gap-1.5"><Building className="w-3.5 h-3.5" /> {p.project_code}</span>
             {p.location && <span className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5" /> {p.location}</span>}
+            {terrainLabel && (
+              <span
+                className={`inline-flex items-center gap-1 text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${
+                  terrainMult >= 1.45 ? "bg-red-50 text-red-700 border-red-200" :
+                  terrainMult >= 1.2 ? "bg-amber-50 text-amber-700 border-amber-200" :
+                  terrainMult < 1.0 ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+                  "bg-gray-50 text-gray-700 border-gray-200"
+                }`}
+                title={`Terrain difficulty multiplier applied to terrain-sensitive stage costs`}
+              >
+                Terrain: {terrainLabel} ×{terrainMult.toFixed(2)}
+              </span>
+            )}
             <span className={`inline-block text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${
               p.status === "active" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
               p.status === "completed" ? "bg-sky-50 text-sky-700 border-sky-200" :
@@ -248,9 +269,11 @@ export default function ProjectDetails({ projectId, onDeleted }: ProjectDetailsP
                 {timeline.map((stage) => {
                   const alloc = Number(stage.allocated_budget) || 0;
                   const recorded = Number(stage.actual_cost) || 0;
-                  const aiCost = Number(stage.ai_inferred_cost) || 0;
+                  // Market-priced AI prediction (can exceed the allocation).
+                  const aiCost = Number(stage.ai_predicted_cost ?? stage.ai_inferred_cost) || 0;
                   const effective = Number(stage.effective_spent ?? Math.max(recorded, aiCost));
                   const aiDriving = aiCost > 0 && aiCost > recorded;
+                  const stageOver = effective > alloc && alloc > 0;
                   const fill = alloc > 0 ? Math.min(100, (effective / alloc) * 100) : 0;
                   const status = stage.status; // backend status: completed | in_progress | not_started | delayed
                   return (
@@ -269,13 +292,15 @@ export default function ProjectDetails({ projectId, onDeleted }: ProjectDetailsP
                         <span>Expected progress: <span className="text-slate-900 font-mono normal-case">{Number(stage.expected_progress || 0).toFixed(1)}%</span></span>
                         <span>Allocated: <span className="text-slate-900 font-mono normal-case">{fmtRwf(alloc)}</span></span>
                         <span>
-                          Spent: <span className="text-slate-900 font-mono normal-case">{fmtRwf(effective)}</span>
+                          {aiDriving && recorded === 0 ? "Predicted: " : "Spent: "}
+                          <span className={`font-mono normal-case ${stageOver ? "text-red-600 font-bold" : "text-slate-900"}`}>{fmtRwf(effective)}</span>
                           {aiDriving && recorded === 0 && <span className="ml-1 text-orange-600 normal-case">(AI)</span>}
+                          {stageOver && <span className="ml-1 text-red-600 normal-case">· +{fmtRwf(effective - alloc)} over plan</span>}
                           {recorded > 0 && aiCost > 0 && recorded < aiCost && <span className="ml-1 text-gray-400 normal-case">(recorded {fmtRwf(recorded)})</span>}
                         </span>
                       </div>
                       <div className="h-1.5 bg-gray-100 rounded overflow-hidden">
-                        <div className={`h-full transition-all ${status === "completed" ? "bg-emerald-500" : status === "in_progress" ? "bg-orange-500" : status === "delayed" ? "bg-red-500" : "bg-gray-300"}`} style={{ width: `${fill}%` }} />
+                        <div className={`h-full transition-all ${stageOver ? "bg-red-500" : status === "completed" ? "bg-emerald-500" : status === "in_progress" ? "bg-orange-500" : status === "delayed" ? "bg-red-500" : "bg-gray-300"}`} style={{ width: `${fill}%` }} />
                       </div>
                     </li>
                   );

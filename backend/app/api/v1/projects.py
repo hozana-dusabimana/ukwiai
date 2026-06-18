@@ -1,7 +1,7 @@
 from typing import Annotated
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
 from sqlalchemy import select, func, desc
 from sqlalchemy.orm import Session
 
@@ -17,9 +17,13 @@ from app.models.cost import CostEstimation
 from app.models.budget import BudgetRecord
 from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectOut, ProjectStatusUpdate, ProjectSummary,
-    AssigneeIn, AssigneeOut,
+    AssigneeIn, AssigneeOut, TerrainAssessmentOut,
 )
-from app.services.cost_estimation import total_recorded_expenses, total_ai_inferred_cost
+from app.services.cost_estimation import (
+    total_recorded_expenses, total_ai_inferred_cost, total_ai_predicted_cost,
+)
+from app.services.ai_client import ai_client, AIServiceError
+from app.services.storage import save_image_bytes
 from app.services.audit import log_action
 from app.services.access import scope_projects, user_can_access
 
@@ -115,6 +119,61 @@ def create_project(
     return p
 
 
+@router.post("/{project_id}/site-background", response_model=TerrainAssessmentOut)
+async def upload_site_background(
+    project_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_manager_or_admin)],
+    file: UploadFile = File(...),
+):
+    """Upload the site-background photo and assess its terrain difficulty.
+
+    Required setup step: the photo of the raw plot is analysed into a difficulty
+    multiplier (≈0.85 easy … 1.80 severe) that the cost engine applies to every
+    terrain-sensitive stage, so a hard site predicts a higher cost than a flat
+    one even at the same budget.
+    """
+    p = db.get(Project, project_id)
+    if not p:
+        raise HTTPException(404, "Project not found")
+    if not (user.role == UserRole.admin or p.created_by == user.id or _user_can_access(db, p, user)):
+        raise HTTPException(403, "You are not assigned to this project.")
+
+    img_bytes = await file.read()
+    filename = file.filename or "site.jpg"
+    try:
+        info = save_image_bytes(project_id, filename, img_bytes)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    try:
+        assessment = await ai_client.assess_terrain(img_bytes, filename=filename)
+    except AIServiceError as exc:
+        raise HTTPException(status_code=503, detail=f"AI service unavailable: {exc}")
+
+    # Clamp defensively so a pathological image can't produce a runaway cost.
+    mult = float(assessment.get("difficulty_multiplier", 1.0))
+    mult = max(0.5, min(2.5, mult))
+
+    p.site_background_image_path = info["image_path"]
+    p.site_background_image_url = info["image_url"]
+    p.terrain_difficulty = Decimal(str(round(mult, 3)))
+    p.terrain_assessment = assessment
+    p.terrain_assessed_at = datetime.now()
+
+    log_action(db, user.id, "project.site_background", "project", project_id,
+               details={"terrain_difficulty": mult, "label": assessment.get("difficulty_label")})
+    db.commit()
+    db.refresh(p)
+    return TerrainAssessmentOut(
+        project_id=p.id,
+        site_background_image_url=p.site_background_image_url,
+        terrain_difficulty=p.terrain_difficulty,
+        terrain_assessment=p.terrain_assessment,
+        terrain_assessed_at=p.terrain_assessed_at,
+    )
+
+
 @router.put("/{project_id}", response_model=ProjectOut)
 def update_project(
     project_id: int,
@@ -201,7 +260,8 @@ def project_summary(project_id: int, db: Annotated[Session, Depends(get_db)], us
 
     total_spent = total_recorded_expenses(db, p.id)
     ai_spent = total_ai_inferred_cost(db, p.id)
-    effective_spent = total_spent if total_spent > ai_spent else ai_spent
+    ai_predicted = total_ai_predicted_cost(db, p.id)
+    effective_spent = total_spent if total_spent > ai_predicted else ai_predicted
     latest_a = db.scalars(
         select(ProgressAnalysis)
         .where(ProgressAnalysis.project_id == p.id)
@@ -222,6 +282,7 @@ def project_summary(project_id: int, db: Annotated[Session, Depends(get_db)], us
         project=p,
         total_expenses=total_spent,
         total_ai_inferred_cost=ai_spent,
+        total_ai_predicted_cost=ai_predicted,
         effective_total_spent=effective_spent,
         latest_progress=float(latest_a.predicted_progress_percentage) if latest_a and latest_a.predicted_progress_percentage is not None else None,
         latest_confidence=float(latest_a.confidence_score) if latest_a and latest_a.confidence_score is not None else None,
@@ -258,7 +319,8 @@ def project_timeline(project_id: int, db: Annotated[Session, Depends(get_db)], u
             "allocated_budget": float(ps.allocated_budget),
             "actual_cost": float(ps.actual_cost),
             "ai_inferred_cost": float(ps.ai_inferred_cost),
-            "effective_spent": float(max(ps.actual_cost, ps.ai_inferred_cost)),
+            "ai_predicted_cost": float(ps.ai_predicted_cost),
+            "effective_spent": float(max(ps.actual_cost, ps.ai_predicted_cost)),
             "status": ps.status.value,
         }
         for ps, s in rows

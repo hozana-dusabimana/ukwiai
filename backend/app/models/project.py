@@ -3,7 +3,7 @@ from decimal import Decimal
 import enum
 from sqlalchemy import (
     String, DateTime, Date, Numeric, Enum as SAEnum, Integer, Text, ForeignKey,
-    UniqueConstraint, func,
+    UniqueConstraint, JSON, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,6 +45,17 @@ class Project(Base):
         index=True,
     )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # --- Site terrain (assessed from the background photo uploaded at setup) ---
+    # The raw plot photo and the AI's difficulty assessment of it. The
+    # difficulty multiplier (≈0.85 easy … 1.80 severe) feeds the cost engine so
+    # harder ground inflates the predicted cost of terrain-sensitive stages.
+    site_background_image_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    site_background_image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    terrain_difficulty: Mapped[Decimal] = mapped_column(Numeric(5, 3), default=Decimal("1.000"), nullable=False)
+    terrain_assessment: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    terrain_assessed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     created_by: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
