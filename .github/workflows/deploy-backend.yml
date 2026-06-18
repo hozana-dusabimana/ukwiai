@@ -1,5 +1,7 @@
 name: Deploy Backend
 
+# Redeploy 7ffd3d0: backend build OOM'd when it ran concurrently with the heavy
+# AI image rebuild on the ~1.8 GB host. Re-run alone now the AI build is done.
 on:
   push:
     branches: [main]
