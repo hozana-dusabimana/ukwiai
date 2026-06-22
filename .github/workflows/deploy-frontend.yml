@@ -1,7 +1,8 @@
 name: Deploy Frontend
 
-# Redeploy 7ffd3d0: frontend vite build OOM'd when it ran concurrently with the
-# heavy AI image rebuild on the ~1.8 GB host. Re-run alone now the AI build is done.
+# Redeploy: frontend vite build OOM'd on the ~1.8 GB host while other docker
+# builds ran concurrently. This commit touches only the frontend workflow so it
+# rebuilds ALONE (backend + AI already deployed), avoiding build contention.
 on:
   push:
     branches: [main]
