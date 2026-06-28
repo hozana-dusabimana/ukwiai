@@ -296,6 +296,14 @@ app.post("/api/analyze", async (req, res) => {
       terrainNote: (terrainMult !== 1 || marketIdx !== 1)
         ? `Terrain ×${terrainMult.toFixed(2)} · market ×${marketIdx.toFixed(2)}`
         : undefined,
+      // Soft wrong-sport flag (volleyball-sized footprint). Clear volleyball
+      // structures are rejected upstream with a 422; this is the early-phase,
+      // measurement-only case where the photo can't tell the sports apart.
+      sportWarning: analysis.sport_warning || undefined,
+      // The court's measured footprint (the "measurement of the basketball court").
+      courtMeasurement: analysis.court_measurement
+        ? `${analysis.court_measurement.total_area_m2} m² (${analysis.court_measurement.perimeter_m} m perimeter)`
+        : undefined,
     };
 
     res.json({ scan: scanRecord, raw: analysis });

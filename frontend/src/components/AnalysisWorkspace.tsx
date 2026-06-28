@@ -270,6 +270,11 @@ export default function AnalysisWorkspace({
         estimated: true,
       });
       toast.success(`AI detected: ${newScan.stageName} (${newScan.progress}%)`);
+      // Surface the soft wrong-sport flag (volleyball-sized footprint). The hard
+      // case — clear volleyball structures — is rejected upstream (422) and shown
+      // via the error path above; this catches the early-phase, measurement-only
+      // ambiguity where the photo alone can't tell the two sports apart.
+      if (newScan.sportWarning) toast.info(newScan.sportWarning);
 
       onAnalysisResult(newScan);
     } catch (err: any) {

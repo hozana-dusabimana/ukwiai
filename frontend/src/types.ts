@@ -20,6 +20,10 @@ export interface ScanHistory {
   predictedStageCost?: string;
   predictedStageCostBand?: string;
   terrainNote?: string;
+  // Soft wrong-sport flag from the court's measured footprint (volleyball-sized).
+  sportWarning?: string;
+  // The measured court footprint, e.g. "608 m² (102 m perimeter)".
+  courtMeasurement?: string;
 }
 
 export interface SystemService {
