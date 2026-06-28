@@ -197,6 +197,41 @@ def estimate_costs(
     }
 
 
+def consumed_estimate(
+    per_stage: list[dict],
+    stage_order: int,
+    within_fraction: float,
+) -> dict:
+    """Predict the **money consumed so far** from a photo.
+
+    Given the full per-stage market bill and the detected stage (with the
+    within-stage fill fraction, 0–1), this rolls up the cost of every stage
+    *before* the detected one in full, plus the detected stage pro-rated by how
+    far into it the photo shows. This is the "money already spent" figure the
+    site sees the moment a progress photo is analysed — distinct from
+    ``project_total`` (the cost of the *whole* build) and from the planning
+    budget.
+    """
+    within = max(0.0, min(1.0, float(within_fraction)))
+    exp = low = high = 0.0
+    for s in per_stage:
+        order = s.get("stage_order", 0)
+        if order < stage_order:
+            exp += s["total"]
+            low += s["total_low"]
+            high += s["total_high"]
+        elif order == stage_order:
+            exp += s["total"] * within
+            low += s["total_low"] * within
+            high += s["total_high"] * within
+    return {
+        "expected": round(exp, 2),
+        "low": round(low, 2),
+        "high": round(high, 2),
+        "within_stage_fraction": round(within, 3),
+    }
+
+
 def _optional_included(material: str, detected: dict) -> bool:
     """Switch on an optional BOM line only when the photo supports it."""
     if material == "asphalt":

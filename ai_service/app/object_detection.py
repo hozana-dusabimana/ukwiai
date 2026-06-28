@@ -37,6 +37,12 @@ _PROMPTS = [
     "outdoor sports court",
     "concrete pavement",
     "construction site",
+    # Volleyball structures — used ONLY to tell a volleyball court apart from a
+    # basketball one (this system monitors basketball). A volleyball court has a
+    # centre net strung between two posts and NO backboard; detecting the net /
+    # posts while seeing no backboard is what flags "wrong sport". See predictor.
+    "volleyball net",
+    "volleyball net post",
 ]
 # Labels the stage-scoring rules read by name — kept stable as prompts grow.
 _STAGE_LABELS = ("basketball backboard", "chain-link fence", "basketball pole")
@@ -161,6 +167,13 @@ def summarize_detections(detections: list[Detection]) -> dict[str, Any]:
         "backboard_score": round(best_score.get("basketball backboard", 0.0), 3),
         "fence_score": round(best_score.get("chain-link fence", 0.0), 3),
         "pole_score": round(best_score.get("basketball pole", 0.0), 3),
+        # Volleyball structures (for the wrong-sport guard, not stage scoring).
+        "volleyball_net_count": counts.get("volleyball net", 0),
+        "volleyball_post_count": counts.get("volleyball net post", 0),
+        "volleyball_score": round(max(
+            best_score.get("volleyball net", 0.0),
+            best_score.get("volleyball net post", 0.0),
+        ), 3),
         # Any detection across our basketball/court/construction prompts is
         # positive evidence that the photo really is a court scene.
         "court_scene_count": len(detections),

@@ -20,7 +20,7 @@ import numpy as np
 from .preprocessing import preprocess, decode_image
 from .stages import STAGES, stage_for_index, NUM_CLASSES
 from .object_detection import detect_court_structures, summarize_detections
-from .cost_model import estimate_costs, detected_materials
+from .cost_model import estimate_costs, detected_materials, consumed_estimate
 
 logger = logging.getLogger("ai-predictor")
 _LOCK = threading.Lock()
@@ -241,6 +241,22 @@ class Predictor:
             None,
         )
 
+        # ----- money consumed so far (predicted from the photo) -----
+        # How far into the detected stage the photo shows, used to pro-rate the
+        # current stage's cost into the "spent so far" roll-up.
+        span = stage.progress_hi - stage.progress_lo
+        within_fraction = (progress - stage.progress_lo) / span if span > 0 else 0.0
+        money_consumed = consumed_estimate(
+            cost_prediction["per_stage"], stage.order, within_fraction
+        )
+        money_consumed["currency"] = cost_prediction["currency"]
+        money_consumed["project_total"] = cost_prediction["project_total"]
+
+        # Sport of the structures the image actually shows (basketball / volleyball
+        # / unknown). "unknown" is normal for early phases that have no structures
+        # yet — the backend then disambiguates from the court's measured footprint.
+        structure_sport = (features or {}).get("structure_sport", "unknown")
+
         return {
             "predicted_stage": stage.name,
             "predicted_stage_order": stage.order,
@@ -249,6 +265,8 @@ class Predictor:
             "confidence_label": _confidence_label(confidence),
             "is_basketball_court": bool(is_relevant),
             "relevance_score": round(float(relevance_score), 3),
+            "structure_sport": structure_sport,
+            "money_consumed": money_consumed,
             "summary": summary,
             "advice": advice,
             "next_stage": next_stage.name if next_stage else None,
@@ -591,6 +609,23 @@ class Predictor:
             or (has_painted_court and has_court_lines and (metal > 0.04 or pole_count >= 2))
         )
 
+        # ----- wrong-sport (volleyball) discrimination -----
+        # This system monitors BASKETBALL courts. A volleyball court is told
+        # apart by STRUCTURE: it has a centre net on two posts and no backboard.
+        # OWLv2 net / net-post detections, in the ABSENCE of any basketball
+        # backboard, are what flag a volleyball court here. (In phases 1-2 there
+        # are no structures at all on either sport — that case is resolved from
+        # the court's measured footprint on the backend, not from the image.)
+        det_volleyball_net = det.get("volleyball_net_count", 0) >= 1
+        det_volleyball_post = det.get("volleyball_post_count", 0) >= 1
+        has_volleyball_signal = det_volleyball_net or det_volleyball_post
+        if det_backboard or has_hoop_signal:
+            structure_sport = "basketball"
+        elif has_volleyball_signal:
+            structure_sport = "volleyball"
+        else:
+            structure_sport = "unknown"
+
         # ----- basketball-court relevance gate -----
         # The heuristic only has genuine evidence of a construction stage when at
         # least one of its tuned surface/structure flags fires (or OWLv2 actually
@@ -789,6 +824,8 @@ class Predictor:
             "has_hoop_signal": bool(has_hoop_signal),
             "has_backboard": bool(has_backboard),
             "has_pole_array": bool(has_pole_array),
+            "has_volleyball_signal": bool(has_volleyball_signal),
+            "structure_sport": structure_sport,
             "evidence_count": int(evidence_count),
             "is_relevant": bool(is_relevant),
             "relevance_score": round(float(relevance_score), 3),

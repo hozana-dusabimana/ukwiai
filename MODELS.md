@@ -91,7 +91,14 @@ Documented in [`model_arch.py`](ai_service/app/model_arch.py):
 
 Google's OWLv2 open-vocabulary detector, used **zero-shot**: we give it natural-language prompts and it finds matching objects with **no task-specific training whatsoever** — that is the entire point of choosing it. Our prompts:
 
-`basketball backboard`, `chain-link fence`, `basketball pole`, `basketball hoop`, `basketball court`, `outdoor sports court`, `concrete pavement`, `construction site`
+`basketball backboard`, `chain-link fence`, `basketball pole`, `basketball hoop`, `basketball court`, `outdoor sports court`, `concrete pavement`, `construction site`, `volleyball net`, `volleyball net post`
+
+### Telling a basketball court apart from a volleyball one
+
+This system monitors **basketball** courts, but a basketball and a volleyball court are *visually identical in the early earthworks phases* (Stage 1 site clearing, Stage 2 sub-base) — bare ground and gravel carry no sport-specific feature. The two are separated on **two independent bases**, so the question is answerable in every phase:
+
+1. **Measurement (works in Stages 1–7, deterministic, always-on).** A basketball playing area is FIBA **28 × 15 m (420 m²)**; a volleyball court is FIVB **18 × 9 m (162 m²)**. The cleared/sub-base **footprint** alone separates them long before any hoop or net exists. `classify_court_sport()` ([`backend/app/services/cost_estimation.py`](backend/app/services/cost_estimation.py)) compares the project's measured footprint to both standards in log-area space and only commits with a clear margin (otherwise → *uncertain*). A volleyball-sized footprint raises a **soft, non-blocking warning** on the analysis (free-text dimensions are too easy to mistype to hard-reject on).
+2. **Structure (Stages 4–7, when OWLv2 is enabled).** A volleyball court has a centre net on two posts and **no backboard**. The `volleyball net` / `volleyball net post` prompts above, firing in the **absence** of any basketball backboard, set `structure_sport = "volleyball"` in the `/predict` response — which the backend **rejects outright (HTTP 422)** with a friendly "this looks like a volleyball court" message before anything is persisted.
 
 ### How it is used
 
@@ -155,6 +162,8 @@ The bill is **independent of the planning budget** — so a stage's predicted co
 ### How it is used
 
 `POST /predict` accepts `area_m2`, `perimeter_m`, `terrain_multiplier` and `market_index` form fields (the backend fills them from the project: court dimensions, the terrain assessed at setup, and config). The response gains `materials_visible`, a full `cost_prediction` bill, and the `predicted_stage_cost` for the detected stage. The backend rolls the per-stage market totals into `project_stages.ai_predicted_cost`, which feeds the variance/deviation engine and the dashboards.
+
+**Money consumed so far (predicted from the photo).** The response also carries `money_consumed` — the cumulative market cost *up to the detected stage*: every stage **before** the detected one priced in full, **plus** the detected stage pro-rated by its within-stage progress (`consumed_estimate()` in [`cost_model.py`](ai_service/app/cost_model.py)). This is the "money already spent" figure the site sees the moment a progress photo is analysed, distinct from `project_total` (the cost of the whole build) and from the planning budget.
 
 ### Why a BOM engine and not a trained cost regressor
 
