@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  EC2_HOST: 98.83.16.194
+  EC2_HOST: 13.63.117.119
   EC2_USER: ubuntu
   PROJECT_DIR: ~/ukwiai
   HEALTH_URL: https://api-ukwiai.isiri.rw/api/system/health
