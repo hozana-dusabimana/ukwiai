@@ -22,6 +22,7 @@ from app.services.cost_estimation import (
     apply_ai_inferred_progress,
     find_project_stage,
     project_cost_context,
+    court_measurement_summary,
 )
 from app.services.alerts import (
     evaluate_cost_alerts,
@@ -116,6 +117,22 @@ async def analyze_image(
             ),
         )
 
+    # ----- Guard 1b: reject the wrong sport (volleyball). -----
+    # This system monitors basketball-court construction. When the image shows
+    # unmistakable volleyball structures (a centre net on its posts) and no
+    # basketball backboard, the AI returns structure_sport="volleyball". A
+    # volleyball court is visually identical to a basketball one only in the
+    # early earthworks phases — once structures appear, this tells them apart.
+    if ai_resp.get("structure_sport") == "volleyball":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "This looks like a volleyball court — the AI detected a volleyball net "
+                "and posts but no basketball backboard. This system monitors basketball-"
+                "court construction, so it can't track a volleyball court's progress."
+            ),
+        )
+
     # ----- Guard 2: don't re-analyse a stage that is already completed. -----
     predicted_stage_name = ai_resp.get("predicted_stage")
     match = find_project_stage(db, proj.id, predicted_stage_name)
@@ -188,6 +205,22 @@ async def analyze_image(
     db.commit()
     db.refresh(analysis)
 
+    # Measurement-based sport check (works in every phase, including 1-2 where the
+    # photo carries no sport-specific feature). A volleyball-sized footprint here
+    # is a soft, non-blocking warning — the free-text dimensions are too easy to
+    # mistype to hard-reject on, and clear volleyball *structures* were already
+    # rejected above.
+    measurement = court_measurement_summary(proj)
+    sport_warning = None
+    if measurement.get("sport_by_measurement") == "volleyball":
+        sport_warning = (
+            f"{measurement['note']} A basketball and a volleyball court look identical "
+            "in the early excavation and sub-base phases, so double-check this project's "
+            "court type and dimensions."
+        )
+    elif measurement.get("sport_by_measurement") == "uncertain":
+        sport_warning = measurement["note"]
+
     return AnalyzeResponse(
         analysis=analysis,
         cost_estimation_id=estimation.id,
@@ -200,6 +233,10 @@ async def analyze_image(
         materials_visible=ai_resp.get("materials_visible") or [],
         cost_prediction=cost_prediction or None,
         predicted_stage_cost=ai_resp.get("predicted_stage_cost"),
+        money_consumed=ai_resp.get("money_consumed"),
+        court_measurement=measurement,
+        structure_sport=ai_resp.get("structure_sport"),
+        sport_warning=sport_warning,
     )
 
 

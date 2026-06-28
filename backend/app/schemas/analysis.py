@@ -36,3 +36,16 @@ class AnalyzeResponse(BaseModel):
     materials_visible: list[str] = []
     cost_prediction: dict | None = None
     predicted_stage_cost: dict | None = None
+    # Predicted money consumed so far, rolled up from the per-stage market bill
+    # at the detected stage (completed stages in full + the current stage
+    # pro-rated by within-stage progress). Distinct from the planning budget.
+    money_consumed: dict | None = None
+    # The court's measured footprint (FIBA-standard check + which sport the size
+    # implies). Surfaces the "measurement of the basketball court".
+    court_measurement: dict | None = None
+    # Sport the IMAGE structures show ("basketball"/"volleyball"/"unknown").
+    structure_sport: str | None = None
+    # Soft, non-blocking note when the measured footprint looks like the wrong
+    # sport (e.g. volleyball-sized). Clear volleyball *structures* are rejected
+    # outright (422) before reaching here; this catches the early-phase case.
+    sport_warning: str | None = None

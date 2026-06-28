@@ -70,6 +70,76 @@ def test_predicted_cost_can_exceed_budget(client, auth_headers, png_bytes):
     assert float(summ["effective_total_spent"]) == float(summ["total_ai_predicted_cost"])
 
 
+def test_volleyball_structure_rejected(client, auth_headers, png_bytes, monkeypatch):
+    """Guard 1b: the AI detects volleyball structures → 422, nothing persisted."""
+    from app.api.v1 import ai as ai_router_module
+
+    p = _make_project(client, auth_headers)
+
+    async def fake_predict(image_bytes, filename="image.jpg", **kwargs):
+        return {
+            "predicted_stage": "Hoops & Backboards Installation",
+            "predicted_progress": 85.0,
+            "confidence": 0.8,
+            "is_basketball_court": True,
+            "structure_sport": "volleyball",
+            "model_version": "test-1.0",
+            "raw_predictions": {},
+        }
+
+    monkeypatch.setattr(ai_router_module.ai_client, "predict", fake_predict)
+    files = {"file": ("vb.png", png_bytes, "image/png")}
+    r = client.post(
+        "/api/ai/analyze-image", headers=auth_headers,
+        data={"project_id": str(p["id"])}, files=files,
+    )
+    assert r.status_code == 422, r.text
+    assert "volleyball" in r.json()["detail"].lower()
+
+
+def test_volleyball_sized_court_warns_but_analyses(client, auth_headers, png_bytes, monkeypatch):
+    """A volleyball-sized footprint (18×9) is a soft warning, not a hard reject —
+    the photo still analyses, but the response flags the wrong-sport measurement."""
+    from app.api.v1 import ai as ai_router_module
+
+    r = client.post("/api/projects", headers=auth_headers, json={
+        "project_name": "VB-sized", "project_code": "KGL-VB",
+        "court_type": "outdoor", "court_dimensions": "18x9", "total_budget": "1000000.00",
+    })
+    p = r.json()
+
+    async def fake_predict(image_bytes, filename="image.jpg", **kwargs):
+        return {
+            "predicted_stage": "Site Clearing & Excavation",
+            "predicted_progress": 5.0,
+            "confidence": 0.5,
+            "is_basketball_court": True,
+            "structure_sport": "unknown",
+            "model_version": "test-1.0",
+            "raw_predictions": {},
+        }
+
+    monkeypatch.setattr(ai_router_module.ai_client, "predict", fake_predict)
+    files = {"file": ("early.png", png_bytes, "image/png")}
+    r = client.post(
+        "/api/ai/analyze-image", headers=auth_headers,
+        data={"project_id": str(p["id"])}, files=files,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["court_measurement"]["sport_by_measurement"] == "volleyball"
+    assert body["sport_warning"] and "volleyball" in body["sport_warning"].lower()
+
+
+def test_court_measurement_classifier():
+    """Footprint-only sport classification — works with no image at all."""
+    from app.services.cost_estimation import classify_court_sport
+    assert classify_court_sport("28x15")[0] == "basketball"
+    assert classify_court_sport("18x9")[0] == "volleyball"
+    assert classify_court_sport(None) == ("basketball", "assumed",
+        "No court dimensions recorded — assuming a standard basketball court.")
+
+
 def test_predict_stage_stateless(client, auth_headers, png_bytes):
     files = {"file": ("test.png", png_bytes, "image/png")}
     r = client.post("/api/ai/predict-stage", headers=auth_headers, files=files)

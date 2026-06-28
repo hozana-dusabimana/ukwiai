@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 import re
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
@@ -40,6 +41,100 @@ def parse_court_geometry(court_dimensions: str | None) -> tuple[float, float]:
                 wf, hf = w + 4.0, h + 4.0
                 return round(wf * hf, 2), round(2 * (wf + hf), 2)
     return _DEFAULT_AREA_M2, _DEFAULT_PERIMETER_M
+
+
+# Standard *playing-area* dimensions (no run-off), in metres.
+#   Basketball — FIBA 28 × 15 m (420 m²). This is the court this system monitors.
+#   Volleyball — FIVB 18 × 9 m (162 m²). Only used to recognise & flag the wrong
+#   sport: a basketball and a volleyball court look identical in the early
+#   earthworks phases (1-2), so the cleared/sub-base FOOTPRINT is the only thing
+#   that tells them apart before any hoop or net exists.
+_BASKETBALL_PLAY = (28.0, 15.0)
+_VOLLEYBALL_PLAY = (18.0, 9.0)
+_BASKETBALL_PLAY_AREA = _BASKETBALL_PLAY[0] * _BASKETBALL_PLAY[1]   # 420 m²
+_VOLLEYBALL_PLAY_AREA = _VOLLEYBALL_PLAY[0] * _VOLLEYBALL_PLAY[1]   # 162 m²
+
+
+def _parse_play_dimensions(court_dimensions: str | None) -> tuple[float, float] | None:
+    """Parse the raw 'WxH' playing-area dimensions (no run-off), or None."""
+    if not court_dimensions:
+        return None
+    nums = re.findall(r"\d+(?:\.\d+)?", court_dimensions)
+    if len(nums) >= 2:
+        w, h = float(nums[0]), float(nums[1])
+        if w > 0 and h > 0:
+            return (max(w, h), min(w, h))  # longest side first
+    return None
+
+
+def classify_court_sport(court_dimensions: str | None) -> tuple[str, str, str]:
+    """Classify a court as basketball / volleyball / uncertain from its measured
+    playing-area footprint alone — works in EVERY construction phase, including
+    the early earthworks (1-2) where no sport-specific structure exists yet.
+
+    Returns ``(sport, basis, note)`` where sport is
+    ``"basketball" | "volleyball" | "uncertain"`` and basis is
+    ``"measurement" | "assumed"``. The decision compares the footprint area to
+    the two standards in log-space, requiring a clear margin before committing —
+    a court sized between the two reads as ``uncertain`` rather than guessing.
+    """
+    dims = _parse_play_dimensions(court_dimensions)
+    if dims is None:
+        return ("basketball", "assumed",
+                "No court dimensions recorded — assuming a standard basketball court.")
+    w, h = dims
+    area = w * h
+    d_bb = abs(math.log(area / _BASKETBALL_PLAY_AREA))
+    d_vb = abs(math.log(area / _VOLLEYBALL_PLAY_AREA))
+    margin = 0.15  # ~16% clear separation in area before we commit
+    if d_vb + margin < d_bb:
+        return ("volleyball", "measurement",
+                f"The court footprint (~{w:g}×{h:g} m, {area:g} m²) matches a volleyball "
+                f"court (18×9 m), not a basketball court (28×15 m).")
+    if d_bb + margin < d_vb:
+        return ("basketball", "measurement",
+                f"The court footprint (~{w:g}×{h:g} m, {area:g} m²) matches a standard "
+                f"basketball court (28×15 m).")
+    return ("uncertain", "measurement",
+            f"The court footprint (~{w:g}×{h:g} m, {area:g} m²) sits between a basketball "
+            f"(28×15 m) and a volleyball (18×9 m) court — confirm the sport.")
+
+
+def court_measurement_summary(project: Project) -> dict:
+    """Human-facing measurement block for a project's court.
+
+    Surfaces what the cost engine actually measured (parsed playing area, the
+    run-off-inclusive total footprint, perimeter), whether it matches the FIBA
+    basketball standard, and which sport the measurement implies. This is the
+    'measurement of the basketball court' the analysis screen shows.
+    """
+    dims = _parse_play_dimensions(project.court_dimensions)
+    total_area, perimeter = parse_court_geometry(project.court_dimensions)
+    sport, basis, note = classify_court_sport(project.court_dimensions)
+    if dims is not None:
+        play_w, play_h = dims
+        play_area = round(play_w * play_h, 2)
+        # FIBA-standard within ±1.5 m on each side.
+        fiba_standard = (
+            abs(play_w - _BASKETBALL_PLAY[0]) <= 1.5
+            and abs(play_h - _BASKETBALL_PLAY[1]) <= 1.5
+        )
+    else:
+        play_w = play_h = None
+        play_area = None
+        fiba_standard = True  # defaulted to the standard court
+    return {
+        "dimensions_text": project.court_dimensions,
+        "play_length_m": play_w,
+        "play_width_m": play_h,
+        "play_area_m2": play_area,
+        "total_area_m2": round(total_area, 2),
+        "perimeter_m": round(perimeter, 2),
+        "fiba_standard": bool(fiba_standard),
+        "sport_by_measurement": sport,
+        "measurement_basis": basis,
+        "note": note,
+    }
 
 
 def project_cost_context(project: Project) -> dict:
