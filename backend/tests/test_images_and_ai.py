@@ -97,9 +97,10 @@ def test_volleyball_structure_rejected(client, auth_headers, png_bytes, monkeypa
     assert "volleyball" in r.json()["detail"].lower()
 
 
-def test_volleyball_sized_court_warns_but_analyses(client, auth_headers, png_bytes, monkeypatch):
-    """A volleyball-sized footprint (18×9) is a soft warning, not a hard reject —
-    the photo still analyses, but the response flags the wrong-sport measurement."""
+def test_volleyball_sized_court_rejected_by_measurement(client, auth_headers, png_bytes, monkeypatch):
+    """Guard 1c: a volleyball-sized footprint (18×9) is hard-rejected by the
+    deterministic measurement check — even in an early phase where the photo
+    itself carries no sport-specific feature (structure_sport='unknown')."""
     from app.api.v1 import ai as ai_router_module
 
     r = client.post("/api/projects", headers=auth_headers, json={
@@ -125,10 +126,8 @@ def test_volleyball_sized_court_warns_but_analyses(client, auth_headers, png_byt
         "/api/ai/analyze-image", headers=auth_headers,
         data={"project_id": str(p["id"])}, files=files,
     )
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["court_measurement"]["sport_by_measurement"] == "volleyball"
-    assert body["sport_warning"] and "volleyball" in body["sport_warning"].lower()
+    assert r.status_code == 422, r.text
+    assert "volleyball" in r.json()["detail"].lower()
 
 
 def test_court_measurement_classifier():

@@ -133,6 +133,23 @@ async def analyze_image(
             ),
         )
 
+    # ----- Guard 1c: reject a non-basketball-sized court by MEASUREMENT. -----
+    # Deterministic and always-on — works in every phase, including the early
+    # earthworks where the photo has no sport-specific feature. When the project's
+    # recorded dimensions clearly match another sport's court (e.g. volleyball
+    # 18x9), the footprint alone proves it isn't a basketball court, so we block
+    # before persisting. An ambiguous size stays a soft warning further down.
+    measurement = court_measurement_summary(proj)
+    if measurement.get("sport_by_measurement") == "volleyball":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{measurement['note']} This system monitors basketball-court "
+                "construction (FIBA 28×15 m). Update the project's court dimensions if "
+                "this really is a basketball court."
+            ),
+        )
+
     # ----- Guard 2: don't re-analyse a stage that is already completed. -----
     predicted_stage_name = ai_resp.get("predicted_stage")
     match = find_project_stage(db, proj.id, predicted_stage_name)
@@ -205,20 +222,12 @@ async def analyze_image(
     db.commit()
     db.refresh(analysis)
 
-    # Measurement-based sport check (works in every phase, including 1-2 where the
-    # photo carries no sport-specific feature). A volleyball-sized footprint here
-    # is a soft, non-blocking warning — the free-text dimensions are too easy to
-    # mistype to hard-reject on, and clear volleyball *structures* were already
-    # rejected above.
-    measurement = court_measurement_summary(proj)
+    # `measurement` was computed up front for Guard 1c. A clear volleyball
+    # footprint already hard-rejected above; here we only surface the soft
+    # warning for an AMBIGUOUS size (between basketball and volleyball), which is
+    # too uncertain to block on but worth flagging to the user.
     sport_warning = None
-    if measurement.get("sport_by_measurement") == "volleyball":
-        sport_warning = (
-            f"{measurement['note']} A basketball and a volleyball court look identical "
-            "in the early excavation and sub-base phases, so double-check this project's "
-            "court type and dimensions."
-        )
-    elif measurement.get("sport_by_measurement") == "uncertain":
+    if measurement.get("sport_by_measurement") == "uncertain":
         sport_warning = measurement["note"]
 
     return AnalyzeResponse(
