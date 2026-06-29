@@ -609,17 +609,29 @@ class Predictor:
             or (has_painted_court and has_court_lines and (metal > 0.04 or pole_count >= 2))
         )
 
-        # ----- wrong-sport (volleyball) discrimination -----
-        # This system monitors BASKETBALL courts. A volleyball court is told
-        # apart by STRUCTURE: it has a centre net on two posts and no backboard.
-        # OWLv2 net / net-post detections, in the ABSENCE of any basketball
-        # backboard, are what flag a volleyball court here. (In phases 1-2 there
-        # are no structures at all on either sport — that case is resolved from
-        # the court's measured footprint on the backend, not from the image.)
+        # ----- wrong-sport discrimination -----
+        # This system monitors BASKETBALL courts. The ONLY basketball-specific
+        # structure is the backboard/hoop, so structure_sport is "basketball"
+        # *only* when a real backboard is detected. A painted court with white
+        # lines and some metal is NOT basketball-specific — volleyball, tennis and
+        # five-a-side courts all share it — and treating it as basketball is what
+        # let those other courts pass as basketball in evaluation. So we no longer
+        # use has_hoop_signal here.
+        #
+        # A COMPETING sport seen with NO backboard (volleyball net/posts, a tennis
+        # court, a football goal) marks the photo as the wrong sport. Volleyball
+        # keeps its own label so the backend can show the specific message; tennis
+        # and football fail the relevance gate below. (In phases 1-2 neither sport
+        # has any structure — that case is resolved from the court's measured
+        # footprint on the backend, not from the image.)
         det_volleyball_net = det.get("volleyball_net_count", 0) >= 1
         det_volleyball_post = det.get("volleyball_post_count", 0) >= 1
+        det_tennis = det.get("tennis_count", 0) >= 1
+        det_football = det.get("football_goal_count", 0) >= 1
         has_volleyball_signal = det_volleyball_net or det_volleyball_post
-        if det_backboard or has_hoop_signal:
+        # Tennis / football detected without a backboard -> reject via relevance.
+        has_competing_other = (det_tennis or det_football) and not det_backboard
+        if det_backboard:
             structure_sport = "basketball"
         elif has_volleyball_signal:
             structure_sport = "volleyball"
@@ -657,7 +669,14 @@ class Predictor:
         #    (any surface-evidence flag passes) to avoid wrongly rejecting a real
         #    site photo. The confirm-before-analysis dialog is the safeguard here.
         if det.get("objdet_active"):
-            is_relevant = det.get("court_scene_count", 0) >= 1 or has_court_lines
+            # A competing sport's structure (tennis court, football goal) with no
+            # basketball backboard fails the gate outright — otherwise the generic
+            # "outdoor sports court" detection would wave it through. Volleyball is
+            # handled separately via structure_sport so the backend can name it.
+            if has_competing_other:
+                is_relevant = False
+            else:
+                is_relevant = det.get("court_scene_count", 0) >= 1 or has_court_lines
             relevance_score = 1.0 if is_relevant else 0.0
         else:
             is_relevant = evidence_count >= _MIN_COURT_EVIDENCE
@@ -825,6 +844,9 @@ class Predictor:
             "has_backboard": bool(has_backboard),
             "has_pole_array": bool(has_pole_array),
             "has_volleyball_signal": bool(has_volleyball_signal),
+            "has_competing_other": bool(has_competing_other),
+            "det_tennis": bool(det_tennis),
+            "det_football": bool(det_football),
             "structure_sport": structure_sport,
             "evidence_count": int(evidence_count),
             "is_relevant": bool(is_relevant),

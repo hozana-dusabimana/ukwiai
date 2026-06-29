@@ -37,18 +37,32 @@ _PROMPTS = [
     "outdoor sports court",
     "concrete pavement",
     "construction site",
-    # Volleyball structures — used ONLY to tell a volleyball court apart from a
-    # basketball one (this system monitors basketball). A volleyball court has a
-    # centre net strung between two posts and NO backboard; detecting the net /
-    # posts while seeing no backboard is what flags "wrong sport". See predictor.
+    # Competing-sport structures — used ONLY to tell a basketball court apart
+    # from another sport's court (this system monitors basketball). None of these
+    # exist on a basketball court, so detecting one while seeing NO backboard is
+    # what flags "wrong sport". See predictor for how they gate relevance.
     "volleyball net",
     "volleyball net post",
+    "tennis court",
+    "football goal post",
 ]
 # Labels the stage-scoring rules read by name — kept stable as prompts grow.
 _STAGE_LABELS = ("basketball backboard", "chain-link fence", "basketball pole")
 # Threshold tuned for precision on real construction photos. OWLv2 returns
 # many low-confidence boxes; 0.20 is a reasonable balance.
 _SCORE_THRESHOLD = float(os.environ.get("AI_OBJDET_THRESHOLD", "0.20"))
+# Wrong-sport prompts run at a LOWER threshold: here we want high recall (catch
+# the competing sport even on a faint detection) because a miss means a
+# volleyball/tennis court gets analysed as basketball, which is the failure mode
+# we're hardening against. False positives cost only a re-shoot.
+_WRONG_SPORT_THRESHOLD = float(os.environ.get("AI_WRONGSPORT_THRESHOLD", "0.14"))
+_WRONG_SPORT_LABELS = frozenset({
+    "volleyball net", "volleyball net post", "tennis court", "football goal post",
+})
+
+
+def _threshold_for(label: str) -> float:
+    return _WRONG_SPORT_THRESHOLD if label in _WRONG_SPORT_LABELS else _SCORE_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -120,7 +134,11 @@ def detect_court_structures(
     if pipeline is None:
         return []
     processor, model, torch = pipeline
-    threshold = _SCORE_THRESHOLD if score_threshold is None else score_threshold
+    # Post-process at the LOWEST threshold any prompt uses, then filter each
+    # detection by its own per-prompt threshold (wrong-sport prompts are kept at
+    # a lower bar for recall). An explicit score_threshold overrides both.
+    floor = (score_threshold if score_threshold is not None
+             else min(_SCORE_THRESHOLD, _WRONG_SPORT_THRESHOLD))
 
     try:
         import cv2
@@ -135,13 +153,17 @@ def detect_court_structures(
         target_sizes = torch.tensor([pil.size[::-1]])  # (H, W)
         results = processor.post_process_object_detection(
             outputs=outputs,
-            threshold=threshold,
+            threshold=floor,
             target_sizes=target_sizes,
         )[0]
+        per_prompt = score_threshold is None  # honour per-prompt bars unless overridden
         out: list[Detection] = []
         for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
+            prompt = _PROMPTS[int(label)]
+            if per_prompt and float(score) < _threshold_for(prompt):
+                continue
             out.append(Detection(
-                label=_PROMPTS[int(label)],
+                label=prompt,
                 score=float(score),
                 box=tuple(float(v) for v in box.tolist()),
             ))
@@ -167,13 +189,20 @@ def summarize_detections(detections: list[Detection]) -> dict[str, Any]:
         "backboard_score": round(best_score.get("basketball backboard", 0.0), 3),
         "fence_score": round(best_score.get("chain-link fence", 0.0), 3),
         "pole_score": round(best_score.get("basketball pole", 0.0), 3),
-        # Volleyball structures (for the wrong-sport guard, not stage scoring).
+        # Competing-sport structures (for the wrong-sport guard, not stage scoring).
         "volleyball_net_count": counts.get("volleyball net", 0),
         "volleyball_post_count": counts.get("volleyball net post", 0),
         "volleyball_score": round(max(
             best_score.get("volleyball net", 0.0),
             best_score.get("volleyball net post", 0.0),
         ), 3),
+        "tennis_count": counts.get("tennis court", 0),
+        "football_goal_count": counts.get("football goal post", 0),
+        # Any non-basketball sport structure seen at all.
+        "competing_sport_count": (
+            counts.get("volleyball net", 0) + counts.get("volleyball net post", 0)
+            + counts.get("tennis court", 0) + counts.get("football goal post", 0)
+        ),
         # Any detection across our basketball/court/construction prompts is
         # positive evidence that the photo really is a court scene.
         "court_scene_count": len(detections),
