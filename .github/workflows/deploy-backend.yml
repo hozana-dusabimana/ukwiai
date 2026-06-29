@@ -12,7 +12,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: deploy-backend
+  # Shared across all deploy-* workflows so they serialize: only one
+  # `docker compose up --build` touches the host at a time. Independent groups
+  # let concurrent deploys race on container recreate ("removal already in
+  # progress") and contend for resources.
+  group: deploy-host
   cancel-in-progress: false
 
 env:
