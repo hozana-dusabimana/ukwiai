@@ -3,11 +3,19 @@ AI client and DB swapped for fakes.
 """
 from __future__ import annotations
 import os
+import tempfile
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-please-rotate-in-real-deploy-1234567890")
 os.environ.setdefault("DB_HOST", "sqlite-memory")
 os.environ.setdefault("ENVIRONMENT", "test")
 # Tests use an in-memory SQLite — skip the production MySQL bootstrap.
 os.environ["UKWI_SKIP_BOOTSTRAP"] = "1"
+# main.py's lifespan mkdir's UPLOAD_DIR/REPORTS_DIR on startup. The production
+# defaults (/app/storage/...) aren't writable when CI runs pytest natively, which
+# made every TestClient(app) error at setup. Point them at a writable temp dir.
+# Must run before any app import so pydantic Settings picks it up.
+_test_storage = tempfile.mkdtemp(prefix="ukwi-test-storage-")
+os.environ.setdefault("UPLOAD_DIR", os.path.join(_test_storage, "uploads"))
+os.environ.setdefault("REPORTS_DIR", os.path.join(_test_storage, "reports"))
 
 import io
 from typing import Iterator
