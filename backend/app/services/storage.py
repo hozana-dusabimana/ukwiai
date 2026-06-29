@@ -3,13 +3,15 @@ import uuid
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageOps
 
 from app.core.config import settings
 
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_BYTES = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+MAX_DIMENSION = settings.MAX_IMAGE_DIMENSION
+MAX_PIXELS = settings.MAX_IMAGE_PIXELS
 
 
 def _ensure_upload_dir() -> Path:
@@ -36,22 +38,51 @@ def save_image_bytes(project_id: int, original_filename: str, data: bytes) -> di
         raise ValueError(f"File too large: {len(data)} bytes (max {MAX_BYTES})")
     ext = validate_image_filename(original_filename)
 
-    # Reject anything that isn't a real, decodable image.
+    # Reject anything that isn't a real, decodable image. verify() consumes the
+    # file object, so we reopen afterwards for the actual processing.
     try:
         PILImage.open(BytesIO(data)).verify()
+        img = PILImage.open(BytesIO(data))
     except Exception as exc:
         raise ValueError(f"Invalid image: {exc}")
+
+    # Dimensions come from the header before a full pixel decode, so we can bail
+    # on decompression bombs without ever materialising them in RAM.
+    w, h = img.size
+    if w * h > MAX_PIXELS or w > MAX_DIMENSION or h > MAX_DIMENSION:
+        raise ValueError(
+            f"Image dimensions too large: {w}x{h} "
+            f"(max {MAX_DIMENSION}px per side, {MAX_PIXELS} pixels total)"
+        )
+
+    # Honour EXIF orientation, then re-encode to strip ALL metadata (EXIF/GPS)
+    # and normalise the colour space so the AI pipeline always sees plain RGB(A).
+    save_format = {"png": "PNG", "webp": "WEBP"}.get(ext.lstrip("."), "JPEG")
+    try:
+        img = ImageOps.exif_transpose(img)
+        if save_format == "JPEG":
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+        elif img.mode not in ("RGB", "RGBA", "L"):
+            img = img.convert("RGBA" if "A" in img.mode else "RGB")
+
+        out = BytesIO()
+        save_kwargs = {"quality": 92} if save_format == "JPEG" else {}
+        img.save(out, format=save_format, **save_kwargs)  # no exif= -> stripped
+    except Exception as exc:
+        raise ValueError(f"Invalid image: {exc}")
+    clean = out.getvalue()
 
     out_dir = _project_dir(project_id)
     new_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{ext}"
     fpath = out_dir / new_name
     with open(fpath, "wb") as f:
-        f.write(data)
+        f.write(clean)
 
     return {
         "image_path": str(fpath),
         "image_url": f"/api/images/file/{project_id}/{new_name}",
-        "file_size": len(data),
+        "file_size": len(clean),
         "original_filename": original_filename,
     }
 

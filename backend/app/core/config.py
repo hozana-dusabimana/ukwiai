@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "/app/storage/uploads"
     REPORTS_DIR: str = "/app/storage/reports"
     MAX_UPLOAD_SIZE_MB: int = 20
+    # Reject absurd pixel dimensions before they reach the AI pipeline / blow up
+    # RAM (PIL decompression-bomb protection). 12000px/side, 50 MP total.
+    MAX_IMAGE_DIMENSION: int = 12000
+    MAX_IMAGE_PIXELS: int = 50_000_000
 
     # Alert thresholds
     BUDGET_OVERRUN_PERCENT: float = 5.0
