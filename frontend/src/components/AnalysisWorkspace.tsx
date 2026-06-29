@@ -203,6 +203,12 @@ export default function AnalysisWorkspace({
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+    // Parity with the upload path: never stage anything that isn't an image
+    // (e.g. a tainted-canvas "data:," result).
+    if (!dataUrl.startsWith("data:image/")) {
+      toast.error("Camera capture failed — please try again.");
+      return;
+    }
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
     // Stage the captured frame and let the user confirm before we analyse it.
     setPendingUpload({ dataUrl, name: `webcam-${stamp}` });
