@@ -1,5 +1,7 @@
 from typing import Any
+import asyncio
 import logging
+import os
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 
 from .predictor import get_predictor
@@ -15,6 +17,48 @@ app = FastAPI(
     description="Computer-vision microservice for basketball-court progress estimation.",
     version="1.0.0",
 )
+
+# ---------------------------------------------------------------------------
+# Inference concurrency guard
+# ---------------------------------------------------------------------------
+# OWLv2 inference is heavy and CPU-bound. The service runs a single uvicorn
+# worker, so calling predict() *synchronously* in the async handler blocks the
+# event loop for the whole inference — which means a burst of concurrent
+# /predict requests queues up unbounded and starves even /health, making the
+# whole service look "down". (This is exactly how a multi-worker eval, or a few
+# users uploading at once, wedged it.)
+#
+# Two defences:
+#   1. Run the blocking inference in a worker thread (`asyncio.to_thread`) so the
+#      event loop — and /health — stay responsive during inference.
+#   2. Bound concurrency with a semaphore and a queue cap: at most
+#      AI_MAX_CONCURRENT_INFER inferences run at once, with at most
+#      AI_MAX_QUEUED_INFER more waiting; anything beyond that is shed with a fast
+#      503 instead of piling up. Load is rejected, never wedged.
+_MAX_CONCURRENT_INFER = max(1, int(os.environ.get("AI_MAX_CONCURRENT_INFER", "2")))
+_MAX_QUEUED_INFER = max(0, int(os.environ.get("AI_MAX_QUEUED_INFER", "8")))
+_infer_sem = asyncio.Semaphore(_MAX_CONCURRENT_INFER)
+_inflight = 0  # running + waiting; guarded by the event loop (single-threaded)
+
+
+async def _run_inference(fn, *args, **kwargs):
+    """Run a blocking predictor call under the concurrency guard.
+
+    Fast-fails with 503 when the service is already saturated so callers retry
+    instead of the request backlog growing without bound and freezing the worker.
+    """
+    global _inflight
+    if _inflight >= _MAX_CONCURRENT_INFER + _MAX_QUEUED_INFER:
+        raise HTTPException(
+            status_code=503,
+            detail="AI service is busy (too many concurrent analyses). Please retry shortly.",
+        )
+    _inflight += 1
+    try:
+        async with _infer_sem:
+            return await asyncio.to_thread(fn, *args, **kwargs)
+    finally:
+        _inflight -= 1
 
 
 @app.on_event("startup")
@@ -73,13 +117,16 @@ async def predict(
     if not data:
         raise HTTPException(400, "Empty file")
     try:
-        return get_predictor().predict(
+        return await _run_inference(
+            get_predictor().predict,
             data,
             area_m2=area_m2,
             perimeter_m=perimeter_m,
             terrain_multiplier=terrain_multiplier,
             market_index=market_index,
         )
+    except HTTPException:
+        raise  # 503 busy / other explicit statuses pass through untouched
     except ValueError as exc:
         raise HTTPException(400, f"Invalid image: {exc}")
     except Exception as exc:
@@ -101,7 +148,11 @@ async def assess_terrain_endpoint(file: UploadFile = File(...)) -> dict[str, Any
     if not data:
         raise HTTPException(400, "Empty file")
     try:
-        return assess_terrain(data)
+        # Terrain is OpenCV-only (no OWLv2) but still blocking — run it off the
+        # event loop too so it can't stall /health under load.
+        return await _run_inference(assess_terrain, data)
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(400, f"Invalid image: {exc}")
     except Exception as exc:
@@ -114,4 +165,10 @@ async def predict_batch(files: list[UploadFile] = File(...)) -> list[dict[str, A
     if not files:
         raise HTTPException(400, "No files provided")
     blobs = [await f.read() for f in files]
-    return get_predictor().predict_batch(blobs)
+    try:
+        return await _run_inference(get_predictor().predict_batch, blobs)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Batch predict failed")
+        raise HTTPException(500, f"Inference error: {exc}")
