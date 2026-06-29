@@ -340,7 +340,11 @@ class Predictor:
         asphalt_mask  = ((s < 60) & (v > 35) & (v < 95))
         # Court paint: HIGH saturation pixels of *any* hue. Stage 5+ courts
         # are blue/green/red/purple/yellow — this single mask covers them all.
-        painted_mask  = ((s > 75) & (v > 70))
+        # Exclude the warm earth band (soil_mask): bare soil is a saturated warm
+        # brown that otherwise reads as a fully "painted" court and mis-predicts
+        # late stages. Real court paint is either a non-earth hue or brighter than
+        # the soil ceiling (s >= 180), so it stays in the mask.
+        painted_mask  = ((s > 75) & (v > 70) & ~soil_mask)
         white_mask    = ((s < 40) & (v > 190))
         metal_mask    = ((s < 30) & (v > 220))
 
@@ -564,7 +568,11 @@ class Predictor:
             or (painted_blob_frac > 0.10 and painted_blob_dom_hues >= 3
                  and center_sat_mean > 50 and painted_blob_rectness > 0.40
                  and smooth_enough)
-        ) and not has_gravel_surface
+        # The blob comes from a morphological CLOSE, which can bridge a diffuse
+        # scatter of saturated pixels (e.g. noisy bare soil) into a full-frame
+        # "blob". Require a real fraction of the frame to actually be paint so a
+        # sparse scatter can't masquerade as a painted court.
+        ) and painted > 0.18 and not has_gravel_surface
 
         # Court lines: 3+ long white segments AND on a painted background.
         has_court_lines = white_on_paint >= 3 and has_painted_court
