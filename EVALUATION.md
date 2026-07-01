@@ -130,6 +130,7 @@ During testing, sending several concurrent requests revealed a **production robu
 - **Label noise** in the web-collected dataset (§2) makes the basketball admission rate a pessimistic floor. A curated, hand-labelled set of real basketball-court site photos would give a cleaner number — and is also the dataset needed to train/validate the CNN (panel action **#1**).
 - **OWLv2 zero-shot recall** for volleyball/tennis/football is imperfect; the measurement gate (§4) is the robust backstop for the early phases the detector cannot resolve.
 - **Recommended tuning:** a small increase of `AI_WRONGSPORT_THRESHOLD` (→ ~0.18) to rebalance basketball admission, then re-measure.
+- **Real stage-classification accuracy — not yet measured.** This report covers the *relevance/sport gate* (admit vs reject). A separate harness, [`eval/evaluate_stages.py`](eval/evaluate_stages.py), measures *which construction stage* the model predicts against **labelled real photos** (`eval/real_test/stage_1..stage_7/`) and prints a stage accuracy + 7×7 confusion matrix. It is ready to run; it needs a set of real per-stage photos as input. That measured number — **not** the synthetic 100% — is what should be cited for stage accuracy.
 
 ---
 
@@ -147,13 +148,18 @@ python download_images.py 250 data
 # 2. Evaluate against the LIVE production server (inference runs on the server)
 python evaluate_live.py data 40 2      # 40 images/class, 2 concurrent workers
 # -> prints the per-class ALLOW/BLOCK matrix and writes results_live.csv
+
+# 3. (optional) Real STAGE-classification accuracy — needs labelled real photos
+#    under eval/real_test/stage_1..stage_7/
+python evaluate_stages.py real_test 2  # -> stage accuracy + 7x7 confusion matrix
 ```
 
 | File | Purpose |
 |------|---------|
 | [`eval/download_images.py`](eval/download_images.py) | builds the 4-class image set via Bing search |
-| [`eval/evaluate_live.py`](eval/evaluate_live.py) | scores a folder against the **live** server and prints the matrix |
-| [`eval/evaluate.py`](eval/evaluate.py) | same, but runs the predictor **locally** (heuristic / OWLv2) |
+| [`eval/evaluate_live.py`](eval/evaluate_live.py) | scores the **relevance/sport gate** against the **live** server |
+| [`eval/evaluate.py`](eval/evaluate.py) | same gate test, but runs the predictor **locally** (heuristic / OWLv2) |
+| [`eval/evaluate_stages.py`](eval/evaluate_stages.py) | **stage-classification** accuracy on labelled real photos (7×7 confusion matrix) |
 | [`eval/results_hardened.csv`](eval/results_hardened.csv) | per-image verdicts from the hardened run in §3.2 (evidence) |
 
-Per-image verdicts are recorded as `class, file, decision, is_basketball_court, structure_sport`.
+Gate verdicts are recorded as `class, file, decision, is_basketball_court, structure_sport`; stage verdicts as `true_stage, file, predicted_stage`.
