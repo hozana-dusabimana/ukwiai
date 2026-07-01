@@ -60,12 +60,14 @@ End-to-end runtime on `tensorflow-cpu`: **~25 minutes** on a CPU laptop (no GPU 
 | Backbone | Frozen (`unfreeze: false`) — heads only |
 | Optimizer | Adam, LR 1e-3 stepped down to 5e-4 then 2.5e-4 |
 
-| Metric | Result |
+| Metric | Result (synthetic held-out) |
 |--------|--------|
-| **Test stage accuracy** | **100 % (210/210 held-out images)** |
+| Test stage accuracy | 100 % (210/210 held-out images) |
 | Test progress MAE | 0.048 (≈ ±4.8 progress points) |
 | Final validation stage accuracy | 100 % |
 | Final validation progress MAE | 0.045 |
+
+> ⚠️ **These figures are on *synthetic* data, not a real-world accuracy claim.** The held-out test set was produced by the **same generator** ([`synthesize.py`](ai_service/app/training/synthesize.py)) as the training set, so 100 % reflects that the training pipeline converges and the canonical stage patterns are learnable — **not** how the model performs on real site photos. Do **not** cite 100 % as the system's accuracy. The figure measured on **real images** is **≈80 % (79.4 %)** validation accuracy — see [`EVALUATION.md`](EVALUATION.md). A real-world *stage-classification* accuracy still needs a labelled real-photo test set (see below).
 
 The predictor refuses to load a degenerate checkpoint: if the side-car metadata reports validation stage-accuracy at or below ~random (1/7, with margin → 0.20), it discards the model and uses the heuristic instead.
 

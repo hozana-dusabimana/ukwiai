@@ -8,6 +8,14 @@
 
 ---
 
+## Headline result
+
+**≈80 % real-world validation accuracy.** On a real (web-collected) test set of **160 images across 4 classes**, the system makes the correct admit/reject decision **79.4 % of the time** (§3.2) — correctly admitting basketball-court photos and rejecting volleyball courts, other sports grounds, and non-court images. This is the figure to cite for real-world performance, because it is measured on **real images** with a full confusion matrix (§3) and a reproducible harness (§8).
+
+> The trained CNN's **100 %** stage-accuracy in `basketball_court_cnn.meta.json` is **synthetic-only** (held-out images from the *same generator* used to train it) — it validates the training pipeline but is **not** a real-world accuracy claim, and should not be presented as the system's accuracy. A real-world *stage-classification* accuracy (which stage is this?) has not yet been measured — it needs a labelled real-photo test set (§7).
+
+---
+
 ## 1. What was tested
 
 The AI service exposes `POST /predict`, which returns — among other fields — two signals the backend uses to **admit or reject** a photo before it is analysed:

@@ -134,7 +134,7 @@ Once `basketball_court_cnn.h5` exists in `ai_service/models/`, the next predicto
 
 ### What you get from `MobileNetV2 + synthetic data`
 
-Training the bundled pipeline on the synthetic dataset produces a model that hits **100% accuracy on the held-out test split (210/210)** in ~25 minutes on a CPU. Sample live response:
+Training the bundled pipeline on the synthetic dataset converges to 100% on its **synthetic** held-out split (210/210) in ~25 minutes on a CPU. Note this is a *synthetic* held-out set from the same generator, so it validates the pipeline — it is **not** a real-world accuracy figure. Measured on **real images**, the system's validation accuracy is **≈80% (79.4%)** — see [`EVALUATION.md`](EVALUATION.md). Sample live response:
 
 ```json
 {
