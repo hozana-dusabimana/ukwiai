@@ -637,26 +637,20 @@ class Predictor:
         det_tennis = det.get("tennis_count", 0) >= 1
         det_football = det.get("football_goal_count", 0) >= 1
         has_volleyball_signal = det_volleyball_net or det_volleyball_post
-        # Tennis / football detected without a backboard -> *candidate* wrong sport.
-        # But the wrong-sport prompts run at the low 0.14 recall threshold, so OWLv2
-        # routinely paints a lone "football goal post" / "tennis court" box onto a
-        # real basketball pole, hoop stanchion or perimeter. That false box must NOT
-        # veto an image already rich in basketball/court/construction evidence — it
-        # was rejecting genuine basketball grounds. So a competing sport only counts
-        # as wrong-sport when it is the DOMINANT reading: no backboard, no painted
-        # court lines, and the competing detections outnumber every other court/
-        # construction detection in the frame (a genuine football/tennis venue reads
-        # as mostly goal-posts/tennis-court, a basketball court does not).
+        # NOTE: OWLv2's "football goal post" / "tennis court" prompts are kept for
+        # debug/telemetry but DELIBERATELY DO NOT veto the image. Run at the 0.14
+        # recall threshold they fire constantly on real basketball poles, hoop
+        # stanchions and perimeter posts: in a 75-photo real-court evaluation this
+        # veto false-rejected 45 genuine basketball grounds (60%) with *zero* true
+        # wrong-sport catches (e.g. po.jpeg read 7 "goal posts" among 12 court-scene
+        # detections). Wrong-sport discrimination the panel actually needs is
+        # volleyball, surfaced below via structure_sport for the backend footprint
+        # check; football/tennis are not part of the product's decision. So basketball
+        # recall wins here and has_competing_other is informational only.
         non_competing_court_hits = max(
             0, det.get("court_scene_count", 0) - det.get("competing_sport_count", 0)
         )
-        competing_dominant = det.get("competing_sport_count", 0) > non_competing_court_hits
-        has_competing_other = (
-            (det_tennis or det_football)
-            and not det_backboard
-            and not has_court_lines
-            and competing_dominant
-        )
+        has_competing_other = (det_tennis or det_football) and not det_backboard
         if det_backboard:
             structure_sport = "basketball"
         elif has_volleyball_signal:
@@ -695,14 +689,18 @@ class Predictor:
         #    (any surface-evidence flag passes) to avoid wrongly rejecting a real
         #    site photo. The confirm-before-analysis dialog is the safeguard here.
         if det.get("objdet_active"):
-            # A competing sport's structure (tennis court, football goal) with no
-            # basketball backboard fails the gate outright — otherwise the generic
-            # "outdoor sports court" detection would wave it through. Volleyball is
-            # handled separately via structure_sport so the backend can name it.
-            if has_competing_other:
-                is_relevant = False
-            else:
-                is_relevant = det.get("court_scene_count", 0) >= 1 or has_court_lines
+            # The image is a real court scene when the detector saw a
+            # basketball/court/construction object that is NOT merely a competing
+            # sport's false box, OR we see painted court lines, OR a pixel
+            # surface-evidence flag fired (early-stage bare-ground / gravel / slab
+            # sites the detector can miss). We do NOT reject on football/tennis —
+            # see the note above; volleyball is labelled, not rejected, so the
+            # backend can disambiguate it from the court footprint.
+            is_relevant = (
+                non_competing_court_hits >= 1
+                or has_court_lines
+                or any(court_evidence)
+            )
             relevance_score = 1.0 if is_relevant else 0.0
         else:
             is_relevant = evidence_count >= _MIN_COURT_EVIDENCE
