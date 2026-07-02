@@ -637,8 +637,26 @@ class Predictor:
         det_tennis = det.get("tennis_count", 0) >= 1
         det_football = det.get("football_goal_count", 0) >= 1
         has_volleyball_signal = det_volleyball_net or det_volleyball_post
-        # Tennis / football detected without a backboard -> reject via relevance.
-        has_competing_other = (det_tennis or det_football) and not det_backboard
+        # Tennis / football detected without a backboard -> *candidate* wrong sport.
+        # But the wrong-sport prompts run at the low 0.14 recall threshold, so OWLv2
+        # routinely paints a lone "football goal post" / "tennis court" box onto a
+        # real basketball pole, hoop stanchion or perimeter. That false box must NOT
+        # veto an image already rich in basketball/court/construction evidence — it
+        # was rejecting genuine basketball grounds. So a competing sport only counts
+        # as wrong-sport when it is the DOMINANT reading: no backboard, no painted
+        # court lines, and the competing detections outnumber every other court/
+        # construction detection in the frame (a genuine football/tennis venue reads
+        # as mostly goal-posts/tennis-court, a basketball court does not).
+        non_competing_court_hits = max(
+            0, det.get("court_scene_count", 0) - det.get("competing_sport_count", 0)
+        )
+        competing_dominant = det.get("competing_sport_count", 0) > non_competing_court_hits
+        has_competing_other = (
+            (det_tennis or det_football)
+            and not det_backboard
+            and not has_court_lines
+            and competing_dominant
+        )
         if det_backboard:
             structure_sport = "basketball"
         elif has_volleyball_signal:
