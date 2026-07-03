@@ -40,6 +40,15 @@ services:
       # rather than the lenient accept-almost-anything fallback.
       AI_FORCE_HEURISTIC: ${AI_FORCE_HEURISTIC:-1}
       AI_DISABLE_OBJDET: ${AI_DISABLE_OBJDET:-0}
+      # OpenRouter vision-language relevance gate: authoritative "is this a
+      # basketball court / court build?" check that rejects open-set non-court
+      # photos (faces, food, rooms) the pixel/OWLv2 detectors misread, and gives
+      # the primary stage reading. Best-effort + fail-open: with no key it is a
+      # no-op and the heuristic/OWLv2 gate carries on. Key lives in .env.prod.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemini-2.5-flash}
+      AI_ENABLE_VLM: ${AI_ENABLE_VLM:-1}
+      OPENROUTER_TIMEOUT: ${OPENROUTER_TIMEOUT:-30}
     command: >
       uvicorn app.main:app --host 127.0.0.1 --port ${AI_PORT:-8004}
     volumes:

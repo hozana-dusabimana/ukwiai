@@ -18,9 +18,10 @@ from typing import Any
 import numpy as np
 
 from .preprocessing import preprocess, decode_image
-from .stages import STAGES, stage_for_index, NUM_CLASSES
+from .stages import STAGES, stage_for_index, stage_midpoint, NUM_CLASSES
 from .object_detection import detect_court_structures, summarize_detections
 from .cost_model import estimate_costs, detected_materials, consumed_estimate
+from .vlm_gate import classify as classify_relevance
 
 logger = logging.getLogger("ai-predictor")
 _LOCK = threading.Lock()
@@ -216,6 +217,31 @@ class Predictor:
         else:
             stage, progress, confidence, raw, is_relevant, relevance_score = self._heuristic(image_bytes)
 
+        # ----- OpenRouter VLM relevance gate + stage cross-check (best-effort) -----
+        # The pixel heuristic / OWLv2 are closed-set detectors and misread
+        # open-set inputs (a face, a road or food read as an "asphalt court"),
+        # which is what let non-court photos through the gate. A vision-language
+        # model answers the open-set question directly, so when it is reachable it
+        # is AUTHORITATIVE for the relevance gate and PRIMARY for the stage
+        # reading. Fail-open: on any missing key / network error / timeout it
+        # returns available=False and we keep the heuristic/CNN result untouched.
+        vlm = classify_relevance(image_bytes)
+        if vlm.available:
+            is_relevant = bool(vlm.is_court_related)
+            relevance_score = (
+                float(vlm.confidence) if vlm.confidence is not None
+                else (1.0 if is_relevant else 0.0)
+            )
+            if is_relevant and vlm.stage is not None:
+                stage = stage_for_index(vlm.stage - 1)
+                if vlm.progress_percent is not None:
+                    progress = max(stage.progress_lo,
+                                   min(stage.progress_hi, float(vlm.progress_percent)))
+                else:
+                    progress = stage_midpoint(vlm.stage - 1)
+                if vlm.confidence is not None:
+                    confidence = float(vlm.confidence)
+
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
         next_stage = STAGES[stage.order] if stage.order < NUM_CLASSES else None
@@ -265,6 +291,16 @@ class Predictor:
             "confidence_label": _confidence_label(confidence),
             "is_basketball_court": bool(is_relevant),
             "relevance_score": round(float(relevance_score), 3),
+            "gate_source": "vlm" if vlm.available else ("cnn" if self._model is not None else "heuristic"),
+            "vlm": {
+                "available": vlm.available,
+                "is_court_related": vlm.is_court_related,
+                "scene": vlm.scene,
+                "stage": vlm.stage,
+                "confidence": vlm.confidence,
+                "reason": vlm.reason,
+                "model": vlm.model,
+            },
             "structure_sport": structure_sport,
             "money_consumed": money_consumed,
             "summary": summary,
