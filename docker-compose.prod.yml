@@ -20,10 +20,11 @@ services:
       context: ./ai_service
       dockerfile: Dockerfile
       args:
-        # Default = heuristic-only deps (the full set's tensorflow-cpu has no
-        # aarch64 wheel). Set AI_REQUIREMENTS=requirements.prod-owlv2.txt in
-        # .env.prod to add torch+transformers and enable OWLv2 detection.
-        REQUIREMENTS: ${AI_REQUIREMENTS:-requirements.prod.txt}
+        # Default = OWLv2 deps (torch+transformers) so the relevance gate that
+        # rejects non-court photos is ON out of the box. The box is a 30 GB
+        # d2.xlarge with headroom for the ~600 MB model. Override with
+        # AI_REQUIREMENTS=requirements.prod.txt in .env.prod only on a small box.
+        REQUIREMENTS: ${AI_REQUIREMENTS:-requirements.prod-owlv2.txt}
     image: ukwi_ai_service:prod
     container_name: ukwi_ai_service
     restart: unless-stopped
@@ -32,19 +33,22 @@ services:
       AI_MODEL_PATH: ${AI_MODEL_PATH:-/app/models/basketball_court_cnn.h5}
       AI_MODEL_VERSION: ${AI_MODEL_VERSION:-1.0.0}
       AI_INPUT_SIZE: ${AI_INPUT_SIZE:-224}
-      # Heuristic-only on this RAM-constrained box: skip the trained CNN (TF)
-      # and the OWLv2 detector (torch, ~600 MB). Flip both off on a bigger box.
+      # Keep the trained CNN off (AI_FORCE_HEURISTIC=1): the CNN path has no
+      # relevance head and blindly marks every image relevant, so the heuristic
+      # path is the ONLY one that can reject non-court photos. OWLv2 is enabled
+      # (AI_DISABLE_OBJDET=0) so that heuristic gate is the strict, reliable one
+      # rather than the lenient accept-almost-anything fallback.
       AI_FORCE_HEURISTIC: ${AI_FORCE_HEURISTIC:-1}
-      AI_DISABLE_OBJDET: ${AI_DISABLE_OBJDET:-1}
+      AI_DISABLE_OBJDET: ${AI_DISABLE_OBJDET:-0}
     command: >
       uvicorn app.main:app --host 127.0.0.1 --port ${AI_PORT:-8004}
     volumes:
       - ./ai_service/models:/app/models
       - ukwi_uploads:/app/storage/uploads:ro
-    # Default 900m suits heuristic-only. Bump to ~2g (AI_MEM_LIMIT=2g) when
-    # enabling OWLv2 — and confirm the host actually has that RAM free first,
-    # since this container shares the box (network_mode: host) with the others.
-    mem_limit: ${AI_MEM_LIMIT:-900m}
+    # 4g suits OWLv2 (torch + ~600 MB model). Drop to 900m (AI_MEM_LIMIT=900m)
+    # only if you also disable OWLv2 on a small box. This container shares the
+    # box (network_mode: host) with the others; the 30 GB d2.xlarge has room.
+    mem_limit: ${AI_MEM_LIMIT:-4g}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${AI_PORT:-8004}/health"]
       interval: 30s

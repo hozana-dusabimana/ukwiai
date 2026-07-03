@@ -40,20 +40,22 @@ jobs:
           git reset --hard FETCH_HEAD
           git --no-pager log --oneline -1
 
-          # Auto-enable OWLv2 only when the host actually has the RAM for it.
-          # OWLv2 (torch + ~600 MB model) needs the AI container at ~2 GB; this
-          # box is network_mode:host and shared with MySQL/backend/frontend, so
-          # on a smaller box we MUST stay heuristic-only or risk OOM-ing prod.
-          # Exported shell vars override the .env.prod defaults for compose.
+          # OWLv2 is ON by default (compose defaults + .env.prod) so the
+          # non-court relevance gate is reliably active. OWLv2 (torch + ~600 MB
+          # model) needs the AI container at ~2 GB; this box is network_mode:host
+          # and shared with MySQL/backend/frontend. Safety valve: if the host is
+          # genuinely low on RAM at deploy time, DOWNGRADE to heuristic-only so we
+          # don't OOM prod. On the 30 GB d2.xlarge this branch never fires.
+          # Exported shell vars override the compose/.env.prod defaults.
           AVAIL_MB=$(free -m | awk '/^Mem:/ {print $7}')
           echo "Available memory: ${AVAIL_MB:-unknown} MB"
           if [ "${AVAIL_MB:-0}" -ge 2200 ]; then
-            echo "Sufficient RAM -> enabling OWLv2 (torch + transformers)."
-            export AI_REQUIREMENTS=requirements.prod-owlv2.txt
-            export AI_MEM_LIMIT=4g
-            export AI_DISABLE_OBJDET=0
+            echo "Sufficient RAM -> keeping OWLv2 enabled (torch + transformers)."
           else
-            echo "Insufficient RAM (need >=2200 MB available) -> staying heuristic-only."
+            echo "Insufficient RAM (need >=2200 MB available) -> downgrading to heuristic-only."
+            export AI_REQUIREMENTS=requirements.prod.txt
+            export AI_MEM_LIMIT=900m
+            export AI_DISABLE_OBJDET=1
           fi
 
           docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build ai_service
