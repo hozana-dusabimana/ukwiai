@@ -210,7 +210,7 @@ app.get("/api/overview", async (req, res) => {
 // Image analysis: forwards multipart to backend. Browser sends JSON {image, name, projectId}.
 app.post("/api/analyze", async (req, res) => {
   try {
-    const { image, name, projectId, lat, lng } = req.body || {};
+    const { image, name, projectId, lat, lng, source } = req.body || {};
     if (!image) return res.status(400).json({ error: "Missing image base64 data" });
 
     const cleanBase64 = image.includes("base64,") ? image.split("base64,")[1] : image;
@@ -239,6 +239,8 @@ app.post("/api/analyze", async (req, res) => {
       form.set("lat", String(lat));
       form.set("lng", String(lng));
     }
+    // "upload" = presentation-only path; the backend skips the geofence for it.
+    if (source) form.set("source", String(source));
 
     const ai = await callBackend(req, "/api/ai/analyze-image", { method: "POST", body: form });
     if (!ai.ok) {

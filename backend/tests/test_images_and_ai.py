@@ -58,6 +58,19 @@ def test_geofence_missing_location_rejected(client, auth_headers, png_bytes):
     assert "Location required" in r.json()["detail"]
 
 
+def test_geofence_upload_source_exempt(client, auth_headers, png_bytes):
+    # Presentation-only Local Upload path bypasses the geofence even on a
+    # geofenced project with no client location supplied.
+    p = _make_geofenced_project(client, auth_headers)
+    files = {"file": ("court.png", png_bytes, "image/png")}
+    r = client.post(
+        "/api/ai/analyze-image", headers=auth_headers,
+        data={"project_id": str(p["id"]), "source": "upload"},  # no lat/lng
+        files=files,
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_geofence_legacy_project_without_coords_exempt(client, auth_headers, png_bytes):
     p = _make_project(client, auth_headers)  # no latitude/longitude
     files = {"file": ("court.png", png_bytes, "image/png")}

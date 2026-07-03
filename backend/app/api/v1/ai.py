@@ -56,6 +56,7 @@ async def analyze_image(
     file: UploadFile | None = File(None),
     lat: float | None = Form(None),
     lng: float | None = Form(None),
+    source: str | None = Form(None),
 ):
     """Analyze either an already-uploaded image (by id) OR a new image upload.
 
@@ -97,7 +98,10 @@ async def analyze_image(
     # without one are exempt. Checked before the AI call so an off-site capture
     # is rejected without spending an inference. A geofenced project with no
     # client location supplied is rejected too (location can't be verified).
-    if proj.latitude is not None and proj.longitude is not None:
+    # `source="upload"` is the presentation-only Local Upload path (an uploaded
+    # photo has no live capture location) and is exempt; production uses the
+    # geofenced camera path.
+    if source != "upload" and proj.latitude is not None and proj.longitude is not None:
         if lat is None or lng is None:
             raise HTTPException(
                 status_code=422,
