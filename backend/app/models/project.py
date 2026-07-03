@@ -34,6 +34,12 @@ class Project(Base):
         SAEnum(CourtType, native_enum=False, length=20), default=CourtType.outdoor, nullable=False
     )
     court_dimensions: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Setup GPS location of the court site. Progress photos are geofenced against
+    # this: a capture more than settings.GEOFENCE_RADIUS_M away is rejected.
+    # Nullable — legacy projects created before geofencing have no coordinates
+    # and are exempt from the check.
+    latitude: Mapped[Decimal | None] = mapped_column(Numeric(10, 7), nullable=True)
+    longitude: Mapped[Decimal | None] = mapped_column(Numeric(10, 7), nullable=True)
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     expected_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     actual_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)

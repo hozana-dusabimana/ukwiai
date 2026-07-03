@@ -117,8 +117,11 @@ def _add_missing_columns(conn) -> None:
     # Market-priced per-stage prediction (can exceed the planned allocation).
     add("project_stages", "ai_predicted_cost", "DECIMAL(15,2) NOT NULL DEFAULT 0", ps_cols)
 
-    # Site terrain + background photo, assessed at project setup.
+    # Setup GPS location (geofencing of progress photos).
     pr_cols = cols("projects")
+    add("projects", "latitude", "DECIMAL(10,7) NULL", pr_cols)
+    add("projects", "longitude", "DECIMAL(10,7) NULL", pr_cols)
+    # Site terrain + background photo, assessed at project setup.
     add("projects", "site_background_image_path", "VARCHAR(500) NULL", pr_cols)
     add("projects", "site_background_image_url", "VARCHAR(500) NULL", pr_cols)
     add("projects", "terrain_difficulty", "DECIMAL(5,3) NOT NULL DEFAULT 1.000", pr_cols)

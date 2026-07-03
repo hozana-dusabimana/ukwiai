@@ -155,6 +155,38 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
   const [bgFile, setBgFile] = useState<File | null>(null);
   const [bgPreview, setBgPreview] = useState<string | null>(null);
   const [step, setStep] = useState<string | null>(null);
+  // Setup GPS location — progress photos are later geofenced against this.
+  const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [locError, setLocError] = useState<string | null>(null);
+
+  const captureLocation = () => {
+    setLocError(null);
+    if (!("geolocation" in navigator)) {
+      setLocError("This device/browser can't provide a location.");
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setCoords({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+        });
+        setLocating(false);
+      },
+      (err) => {
+        setLocError(
+          err.code === err.PERMISSION_DENIED
+            ? "Location permission denied. Allow location access to set the site position."
+            : "Couldn't get your location. Make sure GPS is on and try again."
+        );
+        setLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
 
   const reset = () => {
     setForm({
@@ -167,6 +199,9 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
     setBgFile(null);
     setBgPreview(null);
     setStep(null);
+    setCoords(null);
+    setLocating(false);
+    setLocError(null);
   };
 
   const pickBg = (f: File | null) => {
@@ -175,6 +210,10 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
   };
 
   const submit = async () => {
+    if (!coords) {
+      setError("Capture the site GPS location — progress photos are checked against it so they must be taken on site.");
+      return;
+    }
     if (!bgFile) {
       setError("A site-background photo is required so the AI can assess the terrain and predict costs.");
       return;
@@ -188,6 +227,8 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
         method: "POST",
         body: {
           ...form,
+          latitude: coords.lat,
+          longitude: coords.lng,
           total_budget: form.total_budget ? Number(form.total_budget) : undefined,
           start_date: form.start_date ? new Date(form.start_date).toISOString() : undefined,
           expected_end_date: form.expected_end_date ? new Date(form.expected_end_date).toISOString() : undefined,
@@ -222,7 +263,7 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
       footer={
         <>
           <button onClick={() => { reset(); onClose(); }} className="text-xs font-bold uppercase tracking-wider text-gray-500 hover:text-slate-900 px-4 py-2">Cancel</button>
-          <button onClick={submit} disabled={submitting || !form.project_name || !form.project_code || !bgFile} className="bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-bold uppercase tracking-wider px-4 py-2 rounded">
+          <button onClick={submit} disabled={submitting || !form.project_name || !form.project_code || !bgFile || !coords} className="bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-bold uppercase tracking-wider px-4 py-2 rounded">
             {submitting ? (step || "Creating...") : "Create project"}
           </button>
         </>
@@ -233,6 +274,31 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
       <Field label="Project name *"><input required value={form.project_name} onChange={(e) => setForm((f) => ({ ...f, project_name: e.target.value }))} className="w-full bg-transparent outline-none text-sm" placeholder="Kigali Arena Court B" /></Field>
       <Field label="Project code *"><input required value={form.project_code} onChange={(e) => setForm((f) => ({ ...f, project_code: e.target.value }))} className="w-full bg-transparent outline-none text-sm" placeholder="KGL-2026-04" /></Field>
       <Field label="Location"><input value={form.location} onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))} className="w-full bg-transparent outline-none text-sm" placeholder="Gasabo District" /></Field>
+      <label className="block">
+        <span className="block text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-1.5">Site GPS location *</span>
+        <div className="bg-gray-50 border border-dashed border-gray-300 px-3 py-3 rounded">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={captureLocation}
+              disabled={locating}
+              className="bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-bold uppercase tracking-wider px-3 py-2 rounded flex items-center gap-1.5"
+            >
+              <MapPin className="w-4 h-4" /> {locating ? "Locating…" : coords ? "Update location" : "Use current location"}
+            </button>
+            {coords && (
+              <span className="text-[11px] text-emerald-700 font-semibold">
+                {coords.lat.toFixed(5)}, {coords.lng.toFixed(5)} (±{Math.round(coords.accuracy)} m)
+              </span>
+            )}
+          </div>
+          {locError && <p className="mt-2 text-[11px] text-red-600">{locError}</p>}
+          <p className="mt-2 text-[11px] text-gray-500 leading-snug">
+            Capture the coordinates while standing at the court site. Later progress photos
+            must be taken within 1 km of this point, or the AI analysis is rejected.
+          </p>
+        </div>
+      </label>
       <Field label="Client"><input value={form.client_name} onChange={(e) => setForm((f) => ({ ...f, client_name: e.target.value }))} className="w-full bg-transparent outline-none text-sm" placeholder="City of Kigali" /></Field>
       <Field label="Court type">
         <select value={form.court_type} onChange={(e) => setForm((f) => ({ ...f, court_type: e.target.value }))} className="w-full bg-transparent outline-none text-sm">

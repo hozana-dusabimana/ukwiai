@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     BUDGET_OVERRUN_PERCENT: float = 5.0
     DELAY_ALERT_DAYS: int = 7
 
+    # Geofencing: a progress photo must be captured within this many metres of
+    # the project's setup location, otherwise analysis is rejected. Only enforced
+    # for projects that have a saved latitude/longitude (legacy projects without
+    # one are exempt). Set to 0 or a very large value to effectively disable.
+    GEOFENCE_RADIUS_M: float = 1000.0
+
     # Market index applied to AI material-cost predictions (regional cost of
     # living / inflation / FX). 1.0 = reference Kigali prices. Forwarded to the
     # AI service so the same site re-priced later tracks the live market.

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Camera, CloudUpload, ArrowRight, Clock, CheckCircle2, AlertTriangle, ShieldCheck, VideoOff, RefreshCw, Trash2 } from "lucide-react";
+import { Camera, ArrowRight, Clock, CheckCircle2, AlertTriangle, ShieldCheck, VideoOff, RefreshCw, Trash2 } from "lucide-react";
 import { ScanHistory, OverviewData } from "../types";
 import { api } from "../lib/api";
 import { useToast } from "../ui/Toast";
@@ -121,12 +121,11 @@ export default function AnalysisWorkspace({
     return () => { cancelled = true; };
   }, [selectedProjectId]);
 
-  const [dragOver, setDragOver] = useState(false);
   // Image staged for analysis, awaiting explicit user confirmation. Both the
   // webcam capture and the local-upload paths funnel through this so analysis
   // never starts until the user reviews the preview and clicks "Confirm".
-  const [pendingUpload, setPendingUpload] = useState<{ dataUrl: string; name: string } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pendingUpload, setPendingUpload] = useState<{ dataUrl: string; name: string; gps: { lat: number; lng: number } | null } | null>(null);
+  const [locating, setLocating] = useState(false);
   const progressAnimRef = useRef<number | null>(null);
 
   // Smooth animation from current display value to a target value
@@ -193,6 +192,19 @@ export default function AnalysisWorkspace({
     return () => stopCamera();
   }, []);
 
+  // Best-effort device GPS. Resolves to null (never rejects) so a capture is
+  // never blocked client-side — the backend geofence guard is authoritative and
+  // returns a friendly 422 when a geofenced project needs a location it lacks.
+  const getDeviceLocation = (): Promise<{ lat: number; lng: number } | null> =>
+    new Promise((resolve) => {
+      if (!("geolocation" in navigator)) return resolve(null);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    });
+
   const captureAndAnalyze = async () => {
     const video = videoRef.current;
     if (!video || !streamRef.current) return;
@@ -203,29 +215,33 @@ export default function AnalysisWorkspace({
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
-    // Parity with the upload path: never stage anything that isn't an image
-    // (e.g. a tainted-canvas "data:," result).
+    // Never stage anything that isn't an image (e.g. a tainted-canvas result).
     if (!dataUrl.startsWith("data:image/")) {
       toast.error("Camera capture failed — please try again.");
       return;
     }
+    // Read the device location at the moment of capture so it reflects where the
+    // photo was actually taken.
+    setLocating(true);
+    const gps = await getDeviceLocation();
+    setLocating(false);
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
     // Stage the captured frame and let the user confirm before we analyse it.
-    setPendingUpload({ dataUrl, name: `webcam-${stamp}` });
+    setPendingUpload({ dataUrl, name: `webcam-${stamp}`, gps });
   };
 
   // Run analysis on the staged image once the user confirms.
   const confirmAnalysis = () => {
     if (!pendingUpload) return;
-    const { dataUrl, name } = pendingUpload;
+    const { dataUrl, name, gps } = pendingUpload;
     setPendingUpload(null);
-    triggerAnalysis(dataUrl, name);
+    triggerAnalysis(dataUrl, name, gps);
   };
 
   const cancelAnalysis = () => setPendingUpload(null);
 
   // Handle API post trigger
-  const triggerAnalysis = async (base64Image: string, customName?: string) => {
+  const triggerAnalysis = async (base64Image: string, customName?: string, gps?: { lat: number; lng: number } | null) => {
     try {
       setAppState('PROCESSING AI MODELS...');
       setRunning(true);
@@ -238,6 +254,8 @@ export default function AnalysisWorkspace({
           image: base64Image,
           name: customName || "Site Scan Audit",
           projectId: selectedProjectId,
+          lat: gps?.lat,
+          lng: gps?.lng,
         },
       });
 
@@ -289,49 +307,6 @@ export default function AnalysisWorkspace({
       setAppState('READY FOR INPUT');
       setActiveStage("Analysis failed — try again.");
       toast.error(err?.message || "AI analysis failed");
-    }
-  };
-
-  // Convert files to base64
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      processSelectedFile(file);
-    }
-    // Reset so picking the same file again (e.g. after cancelling) still fires.
-    e.target.value = "";
-  };
-
-  const processSelectedFile = (file: File) => {
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please choose an image file (JPG, PNG or WEBP).");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = reader.result as string;
-      // Stage the file and wait for confirmation instead of analysing instantly.
-      setPendingUpload({ dataUrl: base64, name: file.name.replace(/\.[^/.]+$/, "") });
-    };
-    reader.readAsDataURL(file);
-  };
-
-  // Drag and drop event handlers
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(true);
-  };
-
-  const handleDragLeave = () => {
-    setDragOver(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) {
-      processSelectedFile(file);
     }
   };
 
@@ -419,89 +394,55 @@ export default function AnalysisWorkspace({
         <div className="lg:col-span-7">
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col h-[500px] shadow-sm">
             <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center flex-shrink-0">
-              <span className="font-sans font-bold text-xs uppercase tracking-wider">Dual-Mode Site Capture</span>
+              <span className="font-sans font-bold text-xs uppercase tracking-wider">On-Site Camera Capture</span>
               <span className="px-2.5 py-0.5 bg-orange-600/10 text-orange-500 font-extrabold text-[10px] rounded uppercase tracking-wider border border-orange-500/20 animate-pulse">
                 Live Feed
               </span>
             </div>
 
-            <div className="flex-1 flex flex-col md:flex-row divide-y md:divide-y-0 md:divide-x divide-gray-200 h-full overflow-hidden">
-              {/* Real device camera */}
-              <div className="flex-1 relative bg-black h-1/2 md:h-full overflow-hidden">
-                <video
-                  ref={videoRef}
-                  playsInline
-                  muted
-                  className={`w-full h-full object-cover ${cameraOn ? "opacity-100" : "opacity-0"}`}
-                />
-                {!cameraOn && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-gradient-to-b from-slate-800 to-slate-950">
-                    <Camera className="text-white w-12 h-12 mb-4 drop-shadow-md" />
-                    <h3 className="font-sans text-lg font-bold text-white mb-2">Device Camera</h3>
-                    <p className="text-white/70 text-xs max-w-[220px] mb-2 leading-relaxed">
-                      Use the device webcam to capture and analyse a live site shot.
-                    </p>
-                    {cameraError && <p className="text-red-300 text-[10px] max-w-[220px] mb-3">{cameraError}</p>}
-                    <button
-                      onClick={startCamera}
-                      disabled={running}
-                      className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded h-10 font-bold text-xs uppercase tracking-wider transition-all shadow-md flex items-center gap-1.5 disabled:opacity-50"
-                    >
-                      <Camera className="w-4 h-4" /> Start camera
-                    </button>
-                  </div>
-                )}
-                {cameraOn && (
-                  <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/80 via-black/40 to-transparent flex items-center justify-center gap-3">
-                    <button
-                      onClick={captureAndAnalyze}
-                      disabled={running}
-                      className="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white px-4 py-2 rounded font-bold text-xs uppercase tracking-wider shadow-md flex items-center gap-1.5"
-                    >
-                      <Camera className="w-4 h-4" /> Capture & analyse
-                    </button>
-                    <button
-                      onClick={stopCamera}
-                      className="bg-white/10 hover:bg-white/20 text-white px-3 py-2 rounded font-bold text-xs uppercase tracking-wider flex items-center gap-1.5"
-                    >
-                      <VideoOff className="w-4 h-4" /> Stop
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Drag & Drop */}
-              <div
-                className={`flex-1 flex flex-col items-center justify-center p-6 text-center transition-all h-1/2 md:h-full ${
-                  dragOver ? "bg-sky-50/50 border-orange-500" : "bg-gray-50 hover:bg-gray-100/50"
-                }`}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-              >
-                <CloudUpload className={`w-12 h-12 mb-4 ${dragOver ? "text-orange-600" : "text-gray-400"}`} />
-                <h3 className="font-sans text-lg font-bold text-slate-900 mb-2">Local Upload</h3>
-                <p className="text-gray-500 text-xs max-w-[200px] leading-relaxed mb-6">
-                  Drag and drop site inspection images to run analytical vision modeling
-                </p>
-
-                <input
-                  type="file"
-                  id="file-upload"
-                  accept="image/*"
-                  onChange={handleFileChange}
-                  className="hidden"
-                  ref={fileInputRef}
-                  disabled={running}
-                />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={running}
-                  className="px-5 py-2.5 border border-slate-900 text-slate-900 font-bold text-xs uppercase tracking-wider rounded bg-transparent hover:bg-slate-900 hover:text-white transition-all cursor-pointer disabled:opacity-50"
-                >
-                  Browse Files
-                </button>
-              </div>
+            {/* Real device camera — captures are geolocated and geofenced to the site */}
+            <div className="flex-1 relative bg-black overflow-hidden">
+              <video
+                ref={videoRef}
+                playsInline
+                muted
+                className={`w-full h-full object-cover ${cameraOn ? "opacity-100" : "opacity-0"}`}
+              />
+              {!cameraOn && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-gradient-to-b from-slate-800 to-slate-950">
+                  <Camera className="text-white w-12 h-12 mb-4 drop-shadow-md" />
+                  <h3 className="font-sans text-lg font-bold text-white mb-2">Device Camera</h3>
+                  <p className="text-white/70 text-xs max-w-[280px] mb-2 leading-relaxed">
+                    Capture a live shot at the court site. Progress photos are location-checked,
+                    so you must be at the project location for the analysis to run.
+                  </p>
+                  {cameraError && <p className="text-red-300 text-[10px] max-w-[220px] mb-3">{cameraError}</p>}
+                  <button
+                    onClick={startCamera}
+                    disabled={running}
+                    className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded h-10 font-bold text-xs uppercase tracking-wider transition-all shadow-md flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <Camera className="w-4 h-4" /> Start camera
+                  </button>
+                </div>
+              )}
+              {cameraOn && (
+                <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/80 via-black/40 to-transparent flex items-center justify-center gap-3">
+                  <button
+                    onClick={captureAndAnalyze}
+                    disabled={running || locating}
+                    className="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white px-4 py-2 rounded font-bold text-xs uppercase tracking-wider shadow-md flex items-center gap-1.5"
+                  >
+                    <Camera className="w-4 h-4" /> {locating ? "Getting location…" : "Capture & analyse"}
+                  </button>
+                  <button
+                    onClick={stopCamera}
+                    className="bg-white/10 hover:bg-white/20 text-white px-3 py-2 rounded font-bold text-xs uppercase tracking-wider flex items-center gap-1.5"
+                  >
+                    <VideoOff className="w-4 h-4" /> Stop
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>

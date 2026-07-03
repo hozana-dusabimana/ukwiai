@@ -6,6 +6,69 @@ def _make_project(client, headers):
     return r.json()
 
 
+# --- GPS geofencing -------------------------------------------------------
+# Project site at a point in Kigali. A capture ~130 m away passes; ~1.1 km away
+# is beyond the 1 km limit and is rejected; a geofenced project with no client
+# location is rejected; a project without saved coords is exempt.
+_SITE_LAT, _SITE_LNG = -1.9441, 30.0619
+
+
+def _make_geofenced_project(client, headers):
+    r = client.post("/api/projects", headers=headers, json={
+        "project_name": "Geo Court", "project_code": "KGL-GEO",
+        "court_type": "outdoor", "total_budget": "1000000.00",
+        "latitude": _SITE_LAT, "longitude": _SITE_LNG,
+    })
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_geofence_far_capture_rejected(client, auth_headers, png_bytes):
+    p = _make_geofenced_project(client, auth_headers)
+    files = {"file": ("court.png", png_bytes, "image/png")}
+    r = client.post(
+        "/api/ai/analyze-image", headers=auth_headers,
+        data={"project_id": str(p["id"]), "lat": "-1.9536", "lng": "30.0655"},  # ~1.1 km
+        files=files,
+    )
+    assert r.status_code == 422, r.text
+    assert "from the project site" in r.json()["detail"]
+
+
+def test_geofence_near_capture_passes(client, auth_headers, png_bytes):
+    p = _make_geofenced_project(client, auth_headers)
+    files = {"file": ("court.png", png_bytes, "image/png")}
+    r = client.post(
+        "/api/ai/analyze-image", headers=auth_headers,
+        data={"project_id": str(p["id"]), "lat": "-1.9451", "lng": "30.0625"},  # ~130 m
+        files=files,
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_geofence_missing_location_rejected(client, auth_headers, png_bytes):
+    p = _make_geofenced_project(client, auth_headers)
+    files = {"file": ("court.png", png_bytes, "image/png")}
+    r = client.post(
+        "/api/ai/analyze-image", headers=auth_headers,
+        data={"project_id": str(p["id"])},  # no lat/lng
+        files=files,
+    )
+    assert r.status_code == 422, r.text
+    assert "Location required" in r.json()["detail"]
+
+
+def test_geofence_legacy_project_without_coords_exempt(client, auth_headers, png_bytes):
+    p = _make_project(client, auth_headers)  # no latitude/longitude
+    files = {"file": ("court.png", png_bytes, "image/png")}
+    r = client.post(
+        "/api/ai/analyze-image", headers=auth_headers,
+        data={"project_id": str(p["id"])},  # no lat/lng, but project has none either
+        files=files,
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_upload_image_and_analyze(client, auth_headers, png_bytes):
     p = _make_project(client, auth_headers)
     files = {"file": ("test.png", png_bytes, "image/png")}

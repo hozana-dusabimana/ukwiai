@@ -63,3 +63,5 @@ backend/storage/reports/*
 Thumbs.db
 
 private-key.md
+
+api.md

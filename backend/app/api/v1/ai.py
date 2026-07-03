@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Q
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import CurrentUser, require_admin, require_engineer_plus
 from app.models.image import SiteImage
@@ -32,6 +33,7 @@ from app.services.alerts import (
 )
 from app.services.audit import log_action
 from app.services.access import user_can_access
+from app.services.geo import haversine_m
 from app.services.storage import read_image_bytes, save_image_bytes
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -52,6 +54,8 @@ async def analyze_image(
     image_id: int | None = Form(None),
     project_id: int | None = Form(None),
     file: UploadFile | None = File(None),
+    lat: float | None = Form(None),
+    lng: float | None = Form(None),
 ):
     """Analyze either an already-uploaded image (by id) OR a new image upload.
 
@@ -87,6 +91,37 @@ async def analyze_image(
 
     if proj is None:
         raise HTTPException(404, "Project not found")
+
+    # ----- Guard 0: geofence — the photo must be captured on/near the site. -----
+    # Only enforced for projects set up with a GPS location; legacy projects
+    # without one are exempt. Checked before the AI call so an off-site capture
+    # is rejected without spending an inference. A geofenced project with no
+    # client location supplied is rejected too (location can't be verified).
+    if proj.latitude is not None and proj.longitude is not None:
+        if lat is None or lng is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Location required. Enable location access so we can confirm "
+                    "this photo was taken at the project site, then capture again."
+                ),
+            )
+        distance_m = haversine_m(float(proj.latitude), float(proj.longitude), lat, lng)
+        if distance_m > settings.GEOFENCE_RADIUS_M:
+            away = f"{distance_m / 1000:.1f} km" if distance_m >= 1000 else f"{round(distance_m)} m"
+            limit = (
+                f"{settings.GEOFENCE_RADIUS_M / 1000:.0f} km"
+                if settings.GEOFENCE_RADIUS_M >= 1000
+                else f"{round(settings.GEOFENCE_RADIUS_M)} m"
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"You appear to be about {away} from the project site — beyond the "
+                    f"{limit} limit. Progress photos must be captured at the site. "
+                    "Move to the court location and capture again."
+                ),
+            )
 
     # Cost context: the court geometry, the terrain difficulty assessed from the
     # site background photo at setup, and the configured market index. This is

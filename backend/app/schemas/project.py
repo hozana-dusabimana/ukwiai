@@ -11,6 +11,9 @@ class ProjectBase(BaseModel):
     client_name: str | None = None
     court_type: CourtType = CourtType.outdoor
     court_dimensions: str | None = None
+    # Setup GPS location — progress photos are geofenced against this.
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
     start_date: date | None = None
     expected_end_date: date | None = None
     total_budget: Decimal = Field(ge=0, default=Decimal("0"))
@@ -28,6 +31,8 @@ class ProjectUpdate(BaseModel):
     client_name: str | None = None
     court_type: CourtType | None = None
     court_dimensions: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
     start_date: date | None = None
     expected_end_date: date | None = None
     actual_end_date: date | None = None
